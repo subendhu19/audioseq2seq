@@ -1,6 +1,6 @@
-## End-to-end Audio to NLU
+# End-to-end Audio to NLU
 
-# Notebooks
+## Notebooks
 
 1. Data processing - This file contains the dataprocessing steps. We process the librispeech datasets to obtain the aligned MFCC features and the transcriptions for the seq2seq model.
 
