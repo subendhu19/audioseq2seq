@@ -1,7 +1,7 @@
 import soundfile as sf
 import numpy as np
 from python_speech_features import mfcc
-import sys, os
+import os
 import pickle
 import argparse
 from tqdm import tqdm
@@ -28,9 +28,9 @@ def process(path, split):
     all_files = []
     
     for folder in os.listdir(root_folder):
-        if not '.' in folder:
+        if '.' not in folder:
             for subfolder in os.listdir(os.path.join(root_folder, folder)):
-                if not '.' in subfolder:
+                if '.' not in subfolder:
                     txtfilename = folder + '-' + subfolder + '.trans.txt'
                     txtfile = os.path.join(root_folder, folder, subfolder, txtfilename)
                     all_files.append((root_folder, folder, subfolder, txtfile))
@@ -42,7 +42,8 @@ def process(path, split):
                 transcription = ' '.join(words[1:])
                 audio_file = words[0] + '.flac'
                 audio_features = get_mfcc(os.path.join(root_folder, folder, subfolder, audio_file))
-                processed_set.append((os.path.join(root_folder, folder, subfolder, audio_file), audio_features, transcription))
+                processed_set.append((os.path.join(root_folder, folder, subfolder, audio_file), audio_features,
+                                      transcription))
 
     pickle.dump(processed_set, open(os.path.join(path, split+'.p'), 'wb'))
     print('Processed {} set: {} instances'.format(split, len(processed_set)))
