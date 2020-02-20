@@ -376,9 +376,9 @@ def main():
     args = parser.parse_args()
 
     # Data Processing
-    train_dataset = pickle.load(open(os.path.join(args.data_dir, 'train_processed.p'), 'rb'))
-    dev_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))
-    test_dataset = pickle.load(open(os.path.join(args.data_dir, 'test_processed.p'), 'rb'))
+    train_dataset = pickle.load(open(os.path.join(args.data_dir, 'train-clean-100.p'), 'rb'))
+    dev_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev-clean.p'), 'rb'))
+    test_dataset = pickle.load(open(os.path.join(args.data_dir, 'test-clean.p'), 'rb'))
     input_size = len(train_dataset[0][1][0])
 
     global vocabulary
