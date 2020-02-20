@@ -45,7 +45,7 @@ def preprocess_dataset(dataset):
     return dataset, lengths
 
 
-def get_dataloader(train_dataset, test_dataset, train_data_lengths, batch_size, bucket_num, bucket_ratio):
+def get_dataloader(train_dataset, dev_dataset, test_dataset, train_data_lengths, batch_size, bucket_num, bucket_ratio):
     batchify_fn = nlp.data.batchify.Tuple(
         nlp.data.batchify.Pad(dtype='float32'),
         nlp.data.batchify.Pad(dtype='float32'),
@@ -63,12 +63,17 @@ def get_dataloader(train_dataset, test_dataset, train_data_lengths, batch_size, 
         dataset=train_dataset,
         batch_sampler=batch_sampler,
         batchify_fn=batchify_fn)
+    dev_dataloader = gluon.data.DataLoader(
+        dataset=dev_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        batchify_fn=batchify_fn)
     test_dataloader = gluon.data.DataLoader(
         dataset=test_dataset,
         batch_size=batch_size,
         shuffle=False,
         batchify_fn=batchify_fn)
-    return train_dataloader, test_dataloader
+    return train_dataloader, dev_dataloader, test_dataloader
 
 
 class TriangularSchedule:
@@ -143,11 +148,13 @@ class AudioEncoderTransformer(Block):
 
         with self.name_scope():
             self.proj = nn.Dense(hidden_size, flatten=False)
-            self.t1 = TransformerEncoder(units=self.hidden_size, num_layers=1, hidden_size=16, max_length=50,
-                                         num_heads=1)
+            self.t1 = TransformerEncoder(units=self.hidden_size, num_layers=12, hidden_size=self.hidden_size * 4,
+                                         max_length=500,
+                                         num_heads=12)
             self.subsampler = SubSampler(self.sub_sample_size)
-            self.t2 = TransformerEncoder(units=self.hidden_size, num_layers=1, hidden_size=16, max_length=50,
-                                         num_heads=1)
+            self.t2 = TransformerEncoder(units=self.hidden_size, num_layers=12, hidden_size=self.hidden_size * 4,
+                                         max_length=500,
+                                         num_heads=12)
 
     def forward(self, input, lengths):
         input = self.proj(input)
@@ -168,8 +175,9 @@ class AudioWordDecoder(Block):
 
         with self.name_scope():
             self.embedding = nn.Embedding(output_size, hidden_size)
-            self.t = TransformerDecoder(units=self.hidden_size, num_layers=1, hidden_size=16, max_length=100,
-                                        num_heads=1)
+            self.t = TransformerDecoder(units=self.hidden_size, num_layers=12, hidden_size=self.hidden_size * 4,
+                                        max_length=100,
+                                        num_heads=12)
             self.out = nn.Dense(output_size, in_units=self.hidden_size, flatten=False)
 
     def forward(self, input, enc_outs, enc_valid_lengths, dec_valid_lengths):
@@ -362,47 +370,67 @@ def main():
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--num_epochs", default=25, type=int,
                         help="Number of epochs for training.")
-    parser.add_argument("--learning_rate", default=5e-3, type=float,
+    parser.add_argument("--learning_rate", default=5e-5, type=float,
                         help="The initial learning rate.")
 
     args = parser.parse_args()
 
     # Data Processing
-    train_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed_13.p'), 'rb'))[:100]
-    test_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed_13.p'), 'rb'))[:100]
+    train_dataset = pickle.load(open(os.path.join(args.data_dir, 'train_processed.p'), 'rb'))
+    dev_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))
+    test_dataset = pickle.load(open(os.path.join(args.data_dir, 'test_processed.p'), 'rb'))
     input_size = len(train_dataset[0][1][0])
 
     global vocabulary
     global vocabulary_inv
 
-    vocabulary = {'<pad>': [0, 1], '<unk>': [1, 1], '<BOS>': [2, 1], '<EOS>': [3, 1]}
-    for item in train_dataset + test_dataset:
-        words = item[2].split(' ')
-        for word in words:
-            if word in vocabulary:
-                vocabulary[word][1] += 1
-            else:
-                vocabulary[word] = [len(vocabulary), 1]
+    if 'cached_vocab.p' in os.listdir(args.data_dir):
+        vocabulary, vocabulary_inv = pickle.load(open(os.path.join(args.data_dir, 'cached_vocab.p'), 'rb'))
+        print('Vocabulary loaded from cached file')
+    else:
+        vocabulary = {'<pad>': [0, 1], '<unk>': [1, 1], '<BOS>': [2, 1], '<EOS>': [3, 1]}
+        for item in train_dataset + dev_dataset + test_dataset:
+            words = item[2].split(' ')
+            for word in words:
+                if word in vocabulary:
+                    vocabulary[word][1] += 1
+                else:
+                    vocabulary[word] = [len(vocabulary), 1]
 
-    vocabulary_inv = {}
-    for key in vocabulary:
-        vocabulary_inv[vocabulary[key][0]] = key
+        vocabulary_inv = {}
+        for key in vocabulary:
+            vocabulary_inv[vocabulary[key][0]] = key
+        print('Vocabulary built for the first time')
+        pickle.dump((vocabulary, vocabulary_inv), open(os.path.join(args.data_dir, 'cached_vocab.p'), 'wb'))
+
+    vocab_list = [(word, vocabulary[word][1]) for word in vocabulary]
+    print('Vocabulary Statistics:')
+    print('Total: {}'.format(len(vocabulary)))
+
+    vocab_list.sort(key=lambda x: x[1], reverse=True)
+    print('Max count: {} ({})'.format(vocab_list[0][1], vocab_list[0][0]))
+    print('Most frequent words: ')
+    for i in range(5):
+        print('\t{}\t({})'.format(vocab_list[i][0], vocab_list[i][1]))
+    del vocab_list
 
     train_dataset, train_data_lengths = preprocess_dataset(train_dataset)
+    dev_dataset, dev_data_lengths = preprocess_dataset(dev_dataset)
     test_dataset, test_data_lengths = preprocess_dataset(test_dataset)
 
     # Modeling
     learning_rate, batch_size = args.learning_rate, args.batch_size
     bucket_num, bucket_ratio = 10, 0.2
     grad_clip = None
-    log_interval = 5
+    log_interval = 50
     epochs = args.num_epochs
 
-    train_dataloader, test_dataloader = get_dataloader(train_dataset, test_dataset, train_data_lengths,
-                                                       batch_size, bucket_num, bucket_ratio)
+    train_dataloader, dev_dataloader, test_dataloader = get_dataloader(train_dataset, dev_dataset, test_dataset,
+                                                                       train_data_lengths,
+                                                                       batch_size, bucket_num, bucket_ratio)
     context = mx.cpu()
 
-    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=16, dec_hidden_size=16,
+    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=256, dec_hidden_size=256,
                   context=context)
     net.initialize(mx.init.Xavier(), ctx=context)
 
@@ -414,7 +442,7 @@ def main():
                                                scorer=scorer,
                                                max_length=50)
 
-    train(net, context, epochs, learning_rate, log_interval, grad_clip, train_dataloader, test_dataloader, beam_sampler,
+    train(net, context, epochs, learning_rate, log_interval, grad_clip, train_dataloader, dev_dataloader, beam_sampler,
           args.checkpoint_dir)
     net.save_parameters(os.path.join(args.checkpoint_dir, 'final.params'))
 
@@ -422,10 +450,15 @@ def main():
                                                decoder=BeamDecoder(net),
                                                eos_id=eos_id,
                                                scorer=scorer,
-                                               max_length=50)
+                                               max_length=100)
 
+    net.load_parameters(filename=os.path.join(args.checkpoint_dir, 'best.params'), ctx=context)
+    test_acc = evaluate(net, context, test_dataloader, beam_sampler)
+    print('Test accuracy on best dev model: {}'.format(test_acc))
+
+    print('Some decoder outputs: \n')
     inputs = mx.nd.array([2] * 8)
-    begin_states = mx.nd.array([[[0]*16]] * 8)
+    begin_states = mx.nd.random.normal(0, 1, shape=(8, 1, 256))
     decoder_states = net.decoder.t.init_state_from_encoder(begin_states)
     generate_sequences(beam_sampler, inputs, decoder_states, 1)
 
