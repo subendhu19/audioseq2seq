@@ -71,6 +71,24 @@ def get_dataloader(train_dataset, test_dataset, train_data_lengths, batch_size, 
     return train_dataloader, test_dataloader
 
 
+class TriangularSchedule:
+    def __init__(self, min_lr, max_lr, cycle_length, inc_fraction=0.5):
+        self.min_lr = min_lr
+        self.max_lr = max_lr
+        self.cycle_length = cycle_length
+        self.inc_fraction = inc_fraction
+
+    def __call__(self, iteration):
+        if iteration <= self.cycle_length*self.inc_fraction:
+            unit_cycle = iteration * 1 / (self.cycle_length * self.inc_fraction)
+        elif iteration <= self.cycle_length:
+            unit_cycle = (self.cycle_length - iteration) * 1 / (self.cycle_length * (1 - self.inc_fraction))
+        else:
+            unit_cycle = 0
+        adjusted_cycle = (unit_cycle * (self.max_lr - self.min_lr)) + self.min_lr
+        return adjusted_cycle
+
+
 class SubSampler(gluon.HybridBlock):
 
     def __init__(self, size=3, prefix=None, params=None):
@@ -87,10 +105,38 @@ class SubSampler(gluon.HybridBlock):
         return subsampled, sub_valid_length
 
 
-class AudioEncoder(Block):
+class AudioEncoderRNN(Block):
+
+    def __init__(self, input_size, hidden_size, context, sub_sample_size=3):
+        super(AudioEncoderRNN, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.sub_sample_size = sub_sample_size
+        self.context = context
+
+        with self.name_scope():
+            self.proj = nn.Dense(hidden_size, flatten=False)
+            self.rnn1 = rnn.GRU(hidden_size, input_size=self.hidden_size)
+            self.subsampler = SubSampler(self.sub_sample_size)
+            self.rnn2 = rnn.GRU(hidden_size, input_size=self.hidden_size)
+
+    def forward(self, input, lengths):
+        hidden = self.init_hidden(len(input), self.context)
+        input = input.swapaxes(0, 1)
+        input = self.proj(input)
+        output, hidden1 = self.rnn1(input, hidden)
+        subsampled, sub_lengths = self.subsampler(output, lengths)
+        output, _ = self.rnn2(subsampled, hidden1)
+        return output.swapaxes(0, 1), sub_lengths
+
+    def init_hidden(self, batchsize, ctx):
+        return [F.zeros((1, batchsize, self.hidden_size), ctx=ctx)]
+
+
+class AudioEncoderTransformer(Block):
 
     def __init__(self, input_size, hidden_size, sub_sample_size=3):
-        super(AudioEncoder, self).__init__()
+        super(AudioEncoderTransformer, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.sub_sample_size = sub_sample_size
@@ -122,7 +168,7 @@ class AudioWordDecoder(Block):
 
         with self.name_scope():
             self.embedding = nn.Embedding(output_size, hidden_size)
-            self.t = TransformerDecoder(units=self.hidden_size, num_layers=1, hidden_size=16, max_length=50,
+            self.t = TransformerDecoder(units=self.hidden_size, num_layers=1, hidden_size=16, max_length=100,
                                         num_heads=1)
             self.out = nn.Dense(output_size, in_units=self.hidden_size, flatten=False)
 
@@ -136,14 +182,15 @@ class AudioWordDecoder(Block):
 
 class Seq2Seq(Block):
 
-    def __init__(self, input_size, output_size, enc_hidden_size, dec_hidden_size):
+    def __init__(self, input_size, output_size, enc_hidden_size, dec_hidden_size, context):
         super(Seq2Seq, self).__init__()
         self.input_size = input_size
         self.output_size = output_size
         self.enc_hidden_size = enc_hidden_size
         self.dec_hidden_size = dec_hidden_size
+        self.context = context
         with self.name_scope():
-            self.encoder = AudioEncoder(input_size=input_size, hidden_size=enc_hidden_size)
+            self.encoder = AudioEncoderRNN(input_size=input_size, hidden_size=enc_hidden_size, context=context)
             self.decoder = AudioWordDecoder(hidden_size=dec_hidden_size, output_size=output_size)
 
     def forward(self, audio, alengths, words, wlengths):
@@ -163,6 +210,9 @@ class SoftmaxSequenceCrossEntropyLoss(Loss):
         self._from_logits = from_logits
 
     def hybrid_forward(self, F, pred, label, valid_length):
+        pred = pred[:, :-1, :]
+        label = label[:, 1:]
+        valid_length = valid_length - 1
         if not self._from_logits:
             pred = F.log_softmax(pred, self._axis)
         loss = mx.nd.squeeze(-F.pick(pred, label, axis=self._axis, keepdims=True), axis=2)
@@ -205,17 +255,20 @@ def evaluate(net, context, test_dataloader, beam_sampler):
         outputs = mx.nd.array([2] * words.shape[0])
         decoder_states = net.decoder.t.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
         samples, scores, valid_lengths = beam_sampler(outputs, decoder_states)
-        best_samples = samples[:, 0, 1:-1]
+        best_samples = samples[:, 0, 1:]
         best_vlens = valid_lengths[:, 0]
-        return get_sequence_accuracy(words, wlength, best_samples, best_vlens)
+        return get_sequence_accuracy(words[:, 1:], wlength - 1, best_samples, best_vlens - 1)
 
 
 def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_dataloader, test_dataloader,
           beam_sampler, checkpoint_dir):
     print('Starting Training...')
 
-    trainer = gluon.Trainer(net.collect_params(), 'ftml',
-                            {'learning_rate': learning_rate})
+    # scheduler = TriangularSchedule(min_lr=learning_rate * 1e-2, max_lr=learning_rate, cycle_length=10,
+    #                                inc_fraction=0.2)
+    # optimizer = mx.optimizer.Adam(learning_rate=learning_rate, lr_scheduler=scheduler)
+    optimizer = mx.optimizer.Adam(learning_rate=learning_rate)
+    trainer = gluon.Trainer(net.collect_params(), optimizer=optimizer)
     loss = SoftmaxSequenceCrossEntropyLoss()
 
     parameters = net.collect_params().values()
@@ -307,7 +360,7 @@ def main():
 
     parser.add_argument("--batch_size", default=16, type=int,
                         help="Batch size per GPU/CPU for training.")
-    parser.add_argument("--num_epochs", default=10, type=int,
+    parser.add_argument("--num_epochs", default=25, type=int,
                         help="Number of epochs for training.")
     parser.add_argument("--learning_rate", default=5e-3, type=float,
                         help="The initial learning rate.")
@@ -349,7 +402,8 @@ def main():
                                                        batch_size, bucket_num, bucket_ratio)
     context = mx.cpu()
 
-    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=16, dec_hidden_size=16)
+    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=16, dec_hidden_size=16,
+                  context=context)
     net.initialize(mx.init.Xavier(), ctx=context)
 
     scorer = nlp.model.BeamSearchScorer(alpha=0, K=5, from_logits=False)
@@ -358,7 +412,7 @@ def main():
                                                decoder=BeamDecoder(net),
                                                eos_id=eos_id,
                                                scorer=scorer,
-                                               max_length=20)
+                                               max_length=50)
 
     train(net, context, epochs, learning_rate, log_interval, grad_clip, train_dataloader, test_dataloader, beam_sampler,
           args.checkpoint_dir)
@@ -368,7 +422,7 @@ def main():
                                                decoder=BeamDecoder(net),
                                                eos_id=eos_id,
                                                scorer=scorer,
-                                               max_length=20)
+                                               max_length=50)
 
     inputs = mx.nd.array([2] * 8)
     begin_states = mx.nd.array([[[0]*16]] * 8)

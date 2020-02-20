@@ -31,7 +31,7 @@ def process(path, split):
         if '.' not in folder:
             for subfolder in os.listdir(os.path.join(root_folder, folder)):
                 if '.' not in subfolder:
-                    txtfilename = folder + '-' + subfolder + '.trans.txt'
+                    txtfilename = folder + '-' + subfolder + '.trans.bpe.txt'
                     txtfile = os.path.join(root_folder, folder, subfolder, txtfilename)
                     all_files.append((root_folder, folder, subfolder, txtfile))
     
