@@ -250,7 +250,19 @@ def get_bleu(s1, l1, s2, l2):
 
     scores = []
     for i in range(len(s1)):
-        scores.append(nltk.translate.bleu_score.sentence_bleu([s1[i][:l1[i]]], s2[i][:l2[i]]))
+        sent1 = [c.asscalar() for c in s1[i][:l1[i].asscalar()]]
+        sent2 = [c.asscalar() for c in s2[i][:l2[i].asscalar()]]
+        max_length = min(len(sent1), len(sent2))
+        if max_length == 2:
+            weights = [1.0 / 2] * 2
+        elif max_length == 1:
+            weights = [1]
+        elif max_length == 3:
+            weights = [1.0 / 3] * 3
+        else:
+            weights = weights = [1.0 / 4] * 4
+        scores.append(nltk.translate.bleu_score.sentence_bleu([sent1], sent2, weights))
+
     return np.mean(scores)
 
 
