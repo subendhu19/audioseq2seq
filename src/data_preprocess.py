@@ -11,7 +11,7 @@ def compute_mfcc(audio_data, sample_rate):
     audio_data = audio_data - np.mean(audio_data)
     audio_data = audio_data / np.max(audio_data)
     mfcc_feat = mfcc(audio_data, sample_rate, winlen=0.025, winstep=0.01,
-                     numcep=128, nfilt=256, nfft=512, lowfreq=0, highfreq=None,
+                     numcep=13, nfilt=26, nfft=512, lowfreq=0, highfreq=None,
                      preemph=0.97, ceplifter=22, appendEnergy=True)
     return mfcc_feat 
 
@@ -45,7 +45,7 @@ def process(path, split):
                 processed_set.append((os.path.join(root_folder, folder, subfolder, audio_file), audio_features,
                                       transcription))
 
-    pickle.dump(processed_set, open(os.path.join(path, split+'.p'), 'wb'))
+    pickle.dump(processed_set, open(os.path.join(path, split+'-13.p'), 'wb'))
     print('Processed {} set: {} instances'.format(split, len(processed_set)))
 
 

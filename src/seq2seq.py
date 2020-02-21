@@ -37,7 +37,7 @@ def get_length(x):
 
 def preprocess_dataset(dataset):
     start = time.time()
-    with mp.Pool() as pool:
+    with mp.Pool(5) as pool:
         dataset = gluon.data.SimpleDataset(pool.map(preprocess, dataset))
         lengths = gluon.data.SimpleDataset(pool.map(get_length, dataset))
     end = time.time()
@@ -148,13 +148,13 @@ class AudioEncoderTransformer(Block):
 
         with self.name_scope():
             self.proj = nn.Dense(hidden_size, flatten=False)
-            self.t1 = TransformerEncoder(units=self.hidden_size, num_layers=12, hidden_size=self.hidden_size * 4,
+            self.t1 = TransformerEncoder(units=self.hidden_size, num_layers=8, hidden_size=self.hidden_size * 4,
                                          max_length=500,
-                                         num_heads=12)
+                                         num_heads=8)
             self.subsampler = SubSampler(self.sub_sample_size)
-            self.t2 = TransformerEncoder(units=self.hidden_size, num_layers=12, hidden_size=self.hidden_size * 4,
+            self.t2 = TransformerEncoder(units=self.hidden_size, num_layers=8, hidden_size=self.hidden_size * 4,
                                          max_length=500,
-                                         num_heads=12)
+                                         num_heads=8)
 
     def forward(self, input, lengths):
         input = self.proj(input)
@@ -175,9 +175,9 @@ class AudioWordDecoder(Block):
 
         with self.name_scope():
             self.embedding = nn.Embedding(output_size, hidden_size)
-            self.t = TransformerDecoder(units=self.hidden_size, num_layers=12, hidden_size=self.hidden_size * 4,
+            self.t = TransformerDecoder(units=self.hidden_size, num_layers=8, hidden_size=self.hidden_size * 4,
                                         max_length=100,
-                                        num_heads=12)
+                                        num_heads=8)
             self.out = nn.Dense(output_size, in_units=self.hidden_size, flatten=False)
 
     def forward(self, input, enc_outs, enc_valid_lengths, dec_valid_lengths):
@@ -241,12 +241,12 @@ class BeamDecoder(object):
         return self._model.decoder.out(outputs), new_states
 
 
-def get_sequence_accuracy(s1, l1, s2, l2):
+def get_sequence_accuracy(s1, l1, s2, l2, context):
     s1 = mx.nd.cast(s1, dtype='int32')
     l1 = mx.nd.cast(l1, dtype='int32')
     s2 = mx.nd.cast(s2, dtype='int32')
     l2 = mx.nd.cast(l2, dtype='int32')
-    padding = mx.nd.zeros((s1.shape[0], abs(s1.shape[1] - s2.shape[1])), dtype=s2.dtype)
+    padding = mx.nd.zeros((s1.shape[0], abs(s1.shape[1] - s2.shape[1])), dtype=s2.dtype).as_in_context(context)
     if s1.shape[1] > s2.shape[1]:
         s2 = mx.nd.concat(s2, padding, dim=1)
     else:
@@ -259,13 +259,13 @@ def get_sequence_accuracy(s1, l1, s2, l2):
 
 def evaluate(net, context, test_dataloader, beam_sampler):
     for i, (audio, words, alength, wlength) in enumerate(test_dataloader):
-        encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context), alength)
-        outputs = mx.nd.array([2] * words.shape[0])
+        encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context), alength.as_in_context(context))
+        outputs = mx.nd.array([2] * words.shape[0]).as_in_context(context)
         decoder_states = net.decoder.t.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
         samples, scores, valid_lengths = beam_sampler(outputs, decoder_states)
         best_samples = samples[:, 0, 1:]
         best_vlens = valid_lengths[:, 0]
-        return get_sequence_accuracy(words[:, 1:], wlength - 1, best_samples, best_vlens - 1)
+        return get_sequence_accuracy(words.as_in_context(context)[:, 1:], wlength.as_in_context(context) - 1, best_samples, best_vlens - 1, context)
 
 
 def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_dataloader, test_dataloader,
@@ -301,8 +301,8 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
             log_interval_sent_num += audio.shape[1]
             epoch_sent_num += audio.shape[1]
             with autograd.record():
-                decoder_outputs = net(audio.as_in_context(context), alength, words.as_in_context(context), wlength)
-                L = loss(decoder_outputs, words.as_in_context(context), wlength).sum()
+                decoder_outputs = net(audio.as_in_context(context), alength.as_in_context(context), words.as_in_context(context), wlength.as_in_context(context))
+                L = loss(decoder_outputs, words.as_in_context(context), wlength.as_in_context(context)).sum()
             L.backward()
 
             if grad_clip:
@@ -368,9 +368,9 @@ def main():
 
     parser.add_argument("--batch_size", default=16, type=int,
                         help="Batch size per GPU/CPU for training.")
-    parser.add_argument("--num_epochs", default=25, type=int,
+    parser.add_argument("--num_epochs", default=50, type=int,
                         help="Number of epochs for training.")
-    parser.add_argument("--learning_rate", default=5e-5, type=float,
+    parser.add_argument("--learning_rate", default=2e-5, type=float,
                         help="The initial learning rate.")
 
     args = parser.parse_args()
@@ -428,7 +428,7 @@ def main():
     train_dataloader, dev_dataloader, test_dataloader = get_dataloader(train_dataset, dev_dataset, test_dataset,
                                                                        train_data_lengths,
                                                                        batch_size, bucket_num, bucket_ratio)
-    context = mx.cpu()
+    context = mx.gpu(0)
 
     net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=256, dec_hidden_size=256,
                   context=context)
@@ -457,8 +457,8 @@ def main():
     print('Test accuracy on best dev model: {}'.format(test_acc))
 
     print('Some decoder outputs: \n')
-    inputs = mx.nd.array([2] * 8)
-    begin_states = mx.nd.random.normal(0, 1, shape=(8, 1, 256))
+    inputs = mx.nd.array([2] * 8).as_in_context(context)
+    begin_states = mx.nd.random.normal(0, 1, shape=(8, 1, 256)).as_in_context(context)
     decoder_states = net.decoder.t.init_state_from_encoder(begin_states)
     generate_sequences(beam_sampler, inputs, decoder_states, 1)
 
