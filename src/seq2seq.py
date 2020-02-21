@@ -260,7 +260,7 @@ def get_bleu(s1, l1, s2, l2):
         elif max_length == 3:
             weights = [1.0 / 3] * 3
         else:
-            weights = weights = [1.0 / 4] * 4
+            weights = [1.0 / 4] * 4
         scores.append(nltk.translate.bleu_score.sentence_bleu([sent1], sent2, weights))
 
     return np.mean(scores)
