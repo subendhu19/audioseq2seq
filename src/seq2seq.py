@@ -176,9 +176,9 @@ class AudioWordDecoder(Block):
 
         with self.name_scope():
             self.embedding = nn.Embedding(output_size, hidden_size)
-            self.t = TransformerDecoder(units=self.hidden_size, num_layers=8, hidden_size=self.hidden_size * 4,
+            self.t = TransformerDecoder(units=self.hidden_size, num_layers=1, hidden_size=self.hidden_size * 4,
                                         max_length=100,
-                                        num_heads=8)
+                                        num_heads=1)
             self.out = nn.Dense(output_size, in_units=self.hidden_size, flatten=False)
 
     def forward(self, input, enc_outs, enc_valid_lengths, dec_valid_lengths):
@@ -395,17 +395,17 @@ def main():
 
     parser.add_argument("--batch_size", default=64, type=int,
                         help="Batch size per GPU/CPU for training.")
-    parser.add_argument("--num_epochs", default=50, type=int,
+    parser.add_argument("--num_epochs", default=75, type=int,
                         help="Number of epochs for training.")
-    parser.add_argument("--learning_rate", default=2e-5, type=float,
+    parser.add_argument("--learning_rate", default=5e-3, type=float,
                         help="The initial learning rate.")
 
     args = parser.parse_args()
 
     # Data Processing
-    train_dataset = pickle.load(open(os.path.join(args.data_dir, 'train-clean-100-13.p'), 'rb'))
-    dev_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev-clean-13.p'), 'rb'))
-    test_dataset = pickle.load(open(os.path.join(args.data_dir, 'test-clean-13.p'), 'rb'))
+    train_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))[:10]
+    dev_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))[:10]
+    test_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))[:10]
     input_size = len(train_dataset[0][1][0])
 
     global vocabulary
@@ -455,9 +455,9 @@ def main():
     train_dataloader, dev_dataloader, test_dataloader = get_dataloader(train_dataset, dev_dataset, test_dataset,
                                                                        train_data_lengths,
                                                                        batch_size, bucket_num, bucket_ratio)
-    context = mx.gpu(0)
-
-    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=256, dec_hidden_size=256,
+    # context = mx.gpu(0)
+    context = mx.cpu()
+    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=16, dec_hidden_size=16,
                   context=context)
     net.initialize(mx.init.Xavier(), ctx=context)
 
@@ -483,11 +483,32 @@ def main():
     test_metric = evaluate(net, context, test_dataloader, beam_sampler)
     print('Test BLEU on best dev model: {}'.format(test_metric))
 
-    print('Some decoder outputs: \n')
-    inputs = mx.nd.array([2] * 8).as_in_context(context)
-    begin_states = mx.nd.random.normal(0, 1, shape=(8, 1, 256)).as_in_context(context)
-    decoder_states = net.decoder.t.init_state_from_encoder(begin_states)
-    generate_sequences(beam_sampler, inputs, decoder_states, 1)
+    print('Some decoder outputs: ')
+
+    for i, (audio, words, alength, wlength) in enumerate(test_dataloader):
+        encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context), alength.as_in_context(context))
+        outputs = mx.nd.array([2] * words.shape[0]).as_in_context(context)
+        decoder_states = net.decoder.t.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
+        samples, scores, valid_lengths = beam_sampler(outputs, decoder_states)
+        samples = samples[:, 0, 1:]
+        valid_lengths = valid_lengths[:, 0] - 1
+
+        for k in range(len(samples)):
+            sample = words[k]
+            slen = wlength[k].asscalar()
+
+            sentence = []
+            for ele in sample[:slen]:
+                sentence.append(vocabulary_inv[ele.asscalar()])
+            print('Gold:\t' + ' '.join(sentence[1:-1]))
+
+            sample = samples[k]
+            slen = valid_lengths[k].asscalar()
+
+            sentence = []
+            for ele in sample[:slen]:
+                sentence.append(vocabulary_inv[ele.asscalar()])
+            print('Pred:\t' + ' '.join(sentence[:-1]))
 
 
 if __name__ == "__main__":
