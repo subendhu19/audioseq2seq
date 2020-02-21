@@ -18,6 +18,7 @@ from gluonnlp.model.transformer import TransformerEncoder
 from gluonnlp.model.transformer import TransformerDecoder
 from mxnet.gluon.loss import Loss as Loss
 import argparse
+import nltk
 
 warnings.filterwarnings('ignore')
 random.seed(123)
@@ -241,6 +242,18 @@ class BeamDecoder(object):
         return self._model.decoder.out(outputs), new_states
 
 
+def get_bleu(s1, l1, s2, l2):
+    s1 = mx.nd.cast(s1, dtype='int32')
+    l1 = mx.nd.cast(l1, dtype='int32')
+    s2 = mx.nd.cast(s2, dtype='int32')
+    l2 = mx.nd.cast(l2, dtype='int32')
+
+    scores = []
+    for i in range(len(s1)):
+        scores.append(nltk.translate.bleu_score.sentence_bleu([s1[i][:l1[i]]], s2[i][:l2[i]]))
+    return np.mean(scores)
+
+
 def get_sequence_accuracy(s1, l1, s2, l2, context):
     s1 = mx.nd.cast(s1, dtype='int32')
     l1 = mx.nd.cast(l1, dtype='int32')
@@ -265,7 +278,8 @@ def evaluate(net, context, test_dataloader, beam_sampler):
         samples, scores, valid_lengths = beam_sampler(outputs, decoder_states)
         best_samples = samples[:, 0, 1:]
         best_vlens = valid_lengths[:, 0]
-        return get_sequence_accuracy(words.as_in_context(context)[:, 1:], wlength.as_in_context(context) - 1, best_samples, best_vlens - 1, context)
+        return get_bleu(words.as_in_context(context)[:, 1:], wlength.as_in_context(context) - 1,
+                        best_samples, best_vlens - 1)
 
 
 def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_dataloader, test_dataloader,
@@ -301,7 +315,8 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
             log_interval_sent_num += audio.shape[1]
             epoch_sent_num += audio.shape[1]
             with autograd.record():
-                decoder_outputs = net(audio.as_in_context(context), alength.as_in_context(context), words.as_in_context(context), wlength.as_in_context(context))
+                decoder_outputs = net(audio.as_in_context(context), alength.as_in_context(context),
+                                      words.as_in_context(context), wlength.as_in_context(context))
                 L = loss(decoder_outputs, words.as_in_context(context), wlength.as_in_context(context)).sum()
             L.backward()
 
@@ -327,15 +342,15 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
                 log_interval_loss = 0
 
         end_epoch_time = time.time()
-        test_acc = evaluate(net, context, test_dataloader, beam_sampler)
-        print('[Epoch {}] train avg loss {:.6f}, test acc {:.2f}, '
-              'throughput {:.2f}K fps'.format(epoch, epoch_loss / epoch_sent_num, test_acc,
+        test_bleu = evaluate(net, context, test_dataloader, beam_sampler)
+        print('[Epoch {}] train avg loss {:.6f}, test bleu {:.2f}, '
+              'throughput {:.2f}K fps'.format(epoch, epoch_loss / epoch_sent_num, test_bleu,
                                               epoch_wc / 1000 / (end_epoch_time - start_epoch_time)))
 
         net.save_parameters(os.path.join(checkpoint_dir, 'epoch_{}.params'.format(epoch)))
-        if test_acc > best_test_metrics['metric']:
+        if test_bleu > best_test_metrics['metric']:
             best_test_metrics['epoch'] = epoch
-            best_test_metrics['metric'] = test_acc
+            best_test_metrics['metric'] = test_bleu
             net.save_parameters(os.path.join(checkpoint_dir, 'best.params'))
 
     print('Training complete.')
@@ -366,7 +381,7 @@ def main():
     parser.add_argument("--checkpoint_dir", default="checkpoints", type=str, required=False,
                         help="The output directory where the model checkpoints will be written.")
 
-    parser.add_argument("--batch_size", default=16, type=int,
+    parser.add_argument("--batch_size", default=64, type=int,
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--num_epochs", default=50, type=int,
                         help="Number of epochs for training.")
@@ -376,9 +391,9 @@ def main():
     args = parser.parse_args()
 
     # Data Processing
-    train_dataset = pickle.load(open(os.path.join(args.data_dir, 'train-clean-100.p'), 'rb'))
-    dev_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev-clean.p'), 'rb'))
-    test_dataset = pickle.load(open(os.path.join(args.data_dir, 'test-clean.p'), 'rb'))
+    train_dataset = pickle.load(open(os.path.join(args.data_dir, 'train-clean-100-13.p'), 'rb'))
+    dev_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev-clean-13.p'), 'rb'))
+    test_dataset = pickle.load(open(os.path.join(args.data_dir, 'test-clean-13.p'), 'rb'))
     input_size = len(train_dataset[0][1][0])
 
     global vocabulary
@@ -453,8 +468,8 @@ def main():
                                                max_length=100)
 
     net.load_parameters(filename=os.path.join(args.checkpoint_dir, 'best.params'), ctx=context)
-    test_acc = evaluate(net, context, test_dataloader, beam_sampler)
-    print('Test accuracy on best dev model: {}'.format(test_acc))
+    test_metric = evaluate(net, context, test_dataloader, beam_sampler)
+    print('Test BLEU on best dev model: {}'.format(test_metric))
 
     print('Some decoder outputs: \n')
     inputs = mx.nd.array([2] * 8).as_in_context(context)
