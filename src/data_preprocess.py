@@ -1,24 +1,19 @@
 import soundfile as sf
-import numpy as np
-from python_speech_features import mfcc
+from python_speech_features import logfbank
 import os
 import pickle
 import argparse
 from tqdm import tqdm
 
 
-def compute_mfcc(audio_data, sample_rate):
-    audio_data = audio_data - np.mean(audio_data)
-    audio_data = audio_data / np.max(audio_data)
-    mfcc_feat = mfcc(audio_data, sample_rate, winlen=0.025, winstep=0.01,
-                     numcep=13, nfilt=26, nfft=512, lowfreq=0, highfreq=None,
-                     preemph=0.97, ceplifter=22, appendEnergy=True)
-    return mfcc_feat 
+def compute_lfb(audio_data, sample_rate):
+    fbank_feat = logfbank(audio_data, sample_rate, nfilt=80)
+    return fbank_feat
 
 
-def get_mfcc(audio_file):
+def get_lfb(audio_file):
     audio, sample_rate = sf.read(audio_file)
-    feats = compute_mfcc(audio, sample_rate)
+    feats = compute_lfb(audio, sample_rate)
     return feats
 
 
@@ -41,7 +36,7 @@ def process(path, split):
                 words = line.strip().split(' ')
                 transcription = ' '.join(words[1:])
                 audio_file = words[0] + '.flac'
-                audio_features = get_mfcc(os.path.join(root_folder, folder, subfolder, audio_file))
+                audio_features = get_lfb(os.path.join(root_folder, folder, subfolder, audio_file))
                 processed_set.append((os.path.join(root_folder, folder, subfolder, audio_file), audio_features,
                                       transcription))
 
