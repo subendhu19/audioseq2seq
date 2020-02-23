@@ -19,6 +19,9 @@ from gluonnlp.model.transformer import TransformerDecoder
 from mxnet.gluon.loss import Loss as Loss
 import argparse
 import nltk
+from jiwer import wer
+
+from tqdm import tqdm
 
 warnings.filterwarnings('ignore')
 random.seed(123)
@@ -29,7 +32,7 @@ mx.random.seed(123)
 def preprocess(x):
     name, audio, words = x
     split_words = ['<BOS>'] + words.split(' ') + ['<EOS>']
-    return audio, np.array([vocabulary[word][0] for word in split_words]), float(len(audio)), float(len(split_words))
+    return -1 * audio, np.array([vocabulary[word][0] for word in split_words]), float(len(audio)), float(len(split_words))
 
 
 def get_length(x):
@@ -113,12 +116,11 @@ class SubSampler(gluon.HybridBlock):
 
 class AudioEncoderRNN(Block):
 
-    def __init__(self, input_size, hidden_size, context, sub_sample_size=3):
+    def __init__(self, input_size, hidden_size, sub_sample_size=3):
         super(AudioEncoderRNN, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.sub_sample_size = sub_sample_size
-        self.context = context
 
         with self.name_scope():
             self.proj = nn.Dense(hidden_size, flatten=False)
@@ -127,7 +129,7 @@ class AudioEncoderRNN(Block):
             self.rnn2 = rnn.GRU(hidden_size, input_size=self.hidden_size)
 
     def forward(self, input, lengths):
-        hidden = self.init_hidden(len(input), self.context)
+        hidden = self.init_hidden(len(input), input.context)
         input = input.swapaxes(0, 1)
         input = self.proj(input)
         output, hidden1 = self.rnn1(input, hidden)
@@ -191,15 +193,15 @@ class AudioWordDecoder(Block):
 
 class Seq2Seq(Block):
 
-    def __init__(self, input_size, output_size, enc_hidden_size, dec_hidden_size, context):
+    def __init__(self, input_size, output_size, enc_hidden_size, dec_hidden_size):
         super(Seq2Seq, self).__init__()
         self.input_size = input_size
         self.output_size = output_size
         self.enc_hidden_size = enc_hidden_size
         self.dec_hidden_size = dec_hidden_size
-        self.context = context
+
         with self.name_scope():
-            self.encoder = AudioEncoderRNN(input_size=input_size, hidden_size=enc_hidden_size, context=context)
+            self.encoder = AudioEncoderRNN(input_size=input_size, hidden_size=enc_hidden_size)
             self.decoder = AudioWordDecoder(hidden_size=dec_hidden_size, output_size=output_size)
 
     def forward(self, audio, alengths, words, wlengths):
@@ -242,6 +244,20 @@ class BeamDecoder(object):
         return self._model.decoder.out(outputs), new_states
 
 
+def get_wer(s1, l1, s2, l2):
+    s1 = mx.nd.cast(s1, dtype='int32')
+    l1 = mx.nd.cast(l1, dtype='int32')
+    s2 = mx.nd.cast(s2, dtype='int32')
+    l2 = mx.nd.cast(l2, dtype='int32')
+
+    scores = []
+    for i in range(len(s1)):
+        sent1 = ' '.join([str(c.asscalar()) for c in s1[i][:l1[i].asscalar()]])
+        sent2 = ' '.join([str(c.asscalar()) for c in s2[i][:l2[i].asscalar()]])
+        scores.append(wer(sent1, sent2))
+    return scores
+
+
 def get_bleu(s1, l1, s2, l2):
     s1 = mx.nd.cast(s1, dtype='int32')
     l1 = mx.nd.cast(l1, dtype='int32')
@@ -262,36 +278,27 @@ def get_bleu(s1, l1, s2, l2):
         else:
             weights = [1.0 / 4] * 4
         scores.append(nltk.translate.bleu_score.sentence_bleu([sent1], sent2, weights))
-
-    return np.mean(scores)
-
-
-def get_sequence_accuracy(s1, l1, s2, l2, context):
-    s1 = mx.nd.cast(s1, dtype='int32')
-    l1 = mx.nd.cast(l1, dtype='int32')
-    s2 = mx.nd.cast(s2, dtype='int32')
-    l2 = mx.nd.cast(l2, dtype='int32')
-    padding = mx.nd.zeros((s1.shape[0], abs(s1.shape[1] - s2.shape[1])), dtype=s2.dtype).as_in_context(context)
-    if s1.shape[1] > s2.shape[1]:
-        s2 = mx.nd.concat(s2, padding, dim=1)
-    else:
-        s1 = mx.nd.concat(s1, padding, dim=1)
-    accs = F.SequenceMask((s1 == s2).swapaxes(0, 1),
-                          sequence_length=mx.nd.minimum(l1, l2),
-                          use_sequence_length=True)
-    return (mx.nd.cast(accs.sum(), dtype='float32') / mx.nd.cast(l1.sum(), dtype='float32')).asnumpy().item()
+    return scores
 
 
 def evaluate(net, context, test_dataloader, beam_sampler):
-    for i, (audio, words, alength, wlength) in enumerate(test_dataloader):
+    if context != mx.cpu():
+        context = mx.gpu(0)
+    all_scores = []
+    print('Evaluating...')
+    test_enumerator = tqdm(enumerate(test_dataloader), total=len(test_dataloader))
+    for i, (audio, words, alength, wlength) in test_enumerator:
         encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context), alength.as_in_context(context))
         outputs = mx.nd.array([2] * words.shape[0]).as_in_context(context)
         decoder_states = net.decoder.t.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
         samples, scores, valid_lengths = beam_sampler(outputs, decoder_states)
         best_samples = samples[:, 0, 1:]
         best_vlens = valid_lengths[:, 0]
-        return get_bleu(words.as_in_context(context)[:, 1:], wlength.as_in_context(context) - 1,
-                        best_samples, best_vlens - 1)
+        scores = get_wer(words.as_in_context(context)[:, 1:], wlength.as_in_context(context) - 1,
+                         best_samples, best_vlens - 1)
+        all_scores += scores
+        test_enumerator.set_description('WER: {:.2f}'.format(np.mean(all_scores)))
+    return np.mean(all_scores)
 
 
 def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_dataloader, test_dataloader,
@@ -301,15 +308,16 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
     # scheduler = TriangularSchedule(min_lr=learning_rate * 1e-2, max_lr=learning_rate, cycle_length=10,
     #                                inc_fraction=0.2)
     # optimizer = mx.optimizer.Adam(learning_rate=learning_rate, lr_scheduler=scheduler)
-    optimizer = mx.optimizer.Adam(learning_rate=learning_rate)
+    optimizer = mx.optimizer.AdaDelta(learning_rate=learning_rate)
     trainer = gluon.Trainer(net.collect_params(), optimizer=optimizer)
     loss = SoftmaxSequenceCrossEntropyLoss()
 
     parameters = net.collect_params().values()
 
-    best_test_metrics = {'epoch': 0, 'metric': 0}
+    best_test_metrics = {'epoch': 0, 'metric': 1}
 
     for epoch in range(epochs):
+        print('Epoch {}'.format(epoch))
         start_epoch_time = time.time()
         epoch_loss = 0.0
         epoch_sent_num = 0
@@ -320,31 +328,49 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
         log_interval_sent_num = 0
         log_interval_loss = 0.0
 
-        for i, (audio, words, alength, wlength) in enumerate(train_dataloader):
+        train_enumerator = tqdm(enumerate(train_dataloader), total=len(train_dataloader))
+        for i, (audio, words, alength, wlength) in train_enumerator:
             wc = alength.sum().asscalar()
             log_interval_wc += wc
             epoch_wc += wc
             log_interval_sent_num += audio.shape[1]
             epoch_sent_num += audio.shape[1]
-            with autograd.record():
-                decoder_outputs = net(audio.as_in_context(context), alength.as_in_context(context),
-                                      words.as_in_context(context), wlength.as_in_context(context))
-                L = loss(decoder_outputs, words.as_in_context(context), wlength.as_in_context(context)).sum()
-            L.backward()
+
+            if context != mx.cpu():
+                audio_multi = gluon.utils.split_and_load(audio, context)
+                words_multi = gluon.utils.split_and_load(words, context)
+                alength_multi = gluon.utils.split_and_load(alength, context)
+                wlength_multi = gluon.utils.split_and_load(wlength, context)
+
+                with autograd.record():
+                    losses = [loss(net(a, al, w, wl), w, wl) for a, w, al, wl in
+                              zip(audio_multi, words_multi, alength_multi, wlength_multi)]
+                for l in losses:
+                    l.backward()
+            else:
+                with autograd.record():
+                    decoder_outputs = net(audio.as_in_context(context), alength.as_in_context(context),
+                                          words.as_in_context(context), wlength.as_in_context(context))
+                    L = loss(decoder_outputs, words.as_in_context(context), wlength.as_in_context(context)).sum()
+                L.backward()
 
             if grad_clip:
                 gluon.utils.clip_global_norm(
-                    [p.grad(context) for p in parameters],
+                    [p.grad(context) for p in parameters if p.grad_req != 'null'],
                     grad_clip)
 
             trainer.step(1)
-            log_interval_loss += L.asscalar()
-            epoch_loss += L.asscalar()
+            if context != mx.cpu():
+                log_interval_loss += mx.nd.array(losses).sum().asscalar()
+                epoch_loss += mx.nd.array(losses).sum().asscalar()
+            else:
+                log_interval_loss += L.asscalar()
+                epoch_loss += L.asscalar()
             if (i + 1) % log_interval == 0:
-                print(
-                    '[Epoch {} Batch {}/{}] elapsed {:.2f} s, '
+                train_enumerator.set_description(
+                    '[Batch {}/{}] elapsed {:.2f} s, '
                     'avg loss {:.6f}, throughput {:.2f}K fps'.format(
-                        epoch, i + 1, len(train_dataloader),
+                        i + 1, len(train_dataloader),
                         time.time() - start_log_interval_time,
                         log_interval_loss / log_interval_sent_num,
                         log_interval_wc / 1000 / (time.time() - start_log_interval_time)))
@@ -354,15 +380,15 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
                 log_interval_loss = 0
 
         end_epoch_time = time.time()
-        test_bleu = evaluate(net, context, test_dataloader, beam_sampler)
-        print('[Epoch {}] train avg loss {:.6f}, test bleu {:.2f}, '
-              'throughput {:.2f}K fps'.format(epoch, epoch_loss / epoch_sent_num, test_bleu,
-                                              epoch_wc / 1000 / (end_epoch_time - start_epoch_time)))
+        test_wer = evaluate(net, context, test_dataloader, beam_sampler)
+        print('[Epoch {}] train avg loss {:.6f}, test WER {:.2f}, '
+              'throughput {:.2f}K fps\n'.format(epoch, epoch_loss / epoch_sent_num, test_wer,
+                                                epoch_wc / 1000 / (end_epoch_time - start_epoch_time)))
 
         net.save_parameters(os.path.join(checkpoint_dir, 'epoch_{}.params'.format(epoch)))
-        if test_bleu > best_test_metrics['metric']:
+        if test_wer < best_test_metrics['metric']:
             best_test_metrics['epoch'] = epoch
-            best_test_metrics['metric'] = test_bleu
+            best_test_metrics['metric'] = test_wer
             net.save_parameters(os.path.join(checkpoint_dir, 'best.params'))
 
     print('Training complete.')
@@ -393,12 +419,16 @@ def main():
     parser.add_argument("--checkpoint_dir", default="checkpoints", type=str, required=False,
                         help="The output directory where the model checkpoints will be written.")
 
-    parser.add_argument("--batch_size", default=64, type=int,
+    parser.add_argument("--batch_size", default=32, type=int,
                         help="Batch size per GPU/CPU for training.")
-    parser.add_argument("--num_epochs", default=75, type=int,
+    parser.add_argument("--num_epochs", default=2, type=int,
                         help="Number of epochs for training.")
-    parser.add_argument("--learning_rate", default=5e-3, type=float,
+    parser.add_argument("--learning_rate", default=1, type=float,
                         help="The initial learning rate.")
+    parser.add_argument("--outfile", default="test_predictions.txt", type=str, required=False,
+                        help="The name of the output file.")
+    parser.add_argument("--gpu_count", default=0, type=int,
+                        help="Number of GPUs.")
 
     args = parser.parse_args()
 
@@ -440,6 +470,7 @@ def main():
     for i in range(5):
         print('\t{}\t({})'.format(vocab_list[i][0], vocab_list[i][1]))
     del vocab_list
+    print('\n')
 
     train_dataset, train_data_lengths = preprocess_dataset(train_dataset)
     dev_dataset, dev_data_lengths = preprocess_dataset(dev_dataset)
@@ -448,17 +479,19 @@ def main():
     # Modeling
     learning_rate, batch_size = args.learning_rate, args.batch_size
     bucket_num, bucket_ratio = 10, 0.2
-    grad_clip = None
-    log_interval = 50
+    grad_clip = 10
+    log_interval = 5
     epochs = args.num_epochs
 
     train_dataloader, dev_dataloader, test_dataloader = get_dataloader(train_dataset, dev_dataset, test_dataset,
                                                                        train_data_lengths,
                                                                        batch_size, bucket_num, bucket_ratio)
-    # context = mx.gpu(0)
-    context = mx.cpu()
-    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=16, dec_hidden_size=16,
-                  context=context)
+    if args.gpu_count == 0:
+        context = mx.cpu()
+    else:
+        context = [mx.gpu(i) for i in range(args.gpu_count)]
+
+    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=16, dec_hidden_size=16)
     net.initialize(mx.init.Xavier(), ctx=context)
 
     scorer = nlp.model.BeamSearchScorer(alpha=0, K=5, from_logits=False)
@@ -468,6 +501,8 @@ def main():
                                                eos_id=eos_id,
                                                scorer=scorer,
                                                max_length=50)
+
+    print('\n')
 
     train(net, context, epochs, learning_rate, log_interval, grad_clip, train_dataloader, dev_dataloader, beam_sampler,
           args.checkpoint_dir)
@@ -480,35 +515,41 @@ def main():
                                                max_length=100)
 
     net.load_parameters(filename=os.path.join(args.checkpoint_dir, 'best.params'), ctx=context)
-    test_metric = evaluate(net, context, test_dataloader, beam_sampler)
-    print('Test BLEU on best dev model: {}'.format(test_metric))
 
-    print('Some decoder outputs: ')
+    print('Writing test output to file...')
+    with open(args.outfile, 'w') as test_out:
+        test_metric = evaluate(net, context, test_dataloader, beam_sampler)
+        test_out.write('Test WER on best dev model: {}'.format(test_metric) + '\n\n')
 
-    for i, (audio, words, alength, wlength) in enumerate(test_dataloader):
-        encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context), alength.as_in_context(context))
-        outputs = mx.nd.array([2] * words.shape[0]).as_in_context(context)
-        decoder_states = net.decoder.t.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
-        samples, scores, valid_lengths = beam_sampler(outputs, decoder_states)
-        samples = samples[:, 0, 1:]
-        valid_lengths = valid_lengths[:, 0] - 1
+        test_out.write('Predictions: \n\n')
+        if context != mx.cpu():
+            context = mx.gpu(0)
+        for i, (audio, words, alength, wlength) in enumerate(test_dataloader):
+            encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context),
+                                                               alength.as_in_context(context))
+            outputs = mx.nd.array([2] * words.shape[0]).as_in_context(context)
+            decoder_states = net.decoder.t.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
+            samples, scores, valid_lengths = beam_sampler(outputs, decoder_states)
+            samples = samples[:, 0, 1:]
+            valid_lengths = valid_lengths[:, 0] - 1
 
-        for k in range(len(samples)):
-            sample = words[k]
-            slen = wlength[k].asscalar()
+            for k in range(len(samples)):
+                sample = words[k]
+                slen = wlength[k].asscalar()
 
-            sentence = []
-            for ele in sample[:slen]:
-                sentence.append(vocabulary_inv[ele.asscalar()])
-            print('Gold:\t' + ' '.join(sentence[1:-1]))
+                sentence = []
+                for ele in sample[:slen]:
+                    sentence.append(vocabulary_inv[ele.asscalar()])
+                test_out.write('Gold:\t' + ' '.join(sentence[1:-1]) + '\n')
 
-            sample = samples[k]
-            slen = valid_lengths[k].asscalar()
+                sample = samples[k]
+                slen = valid_lengths[k].asscalar()
 
-            sentence = []
-            for ele in sample[:slen]:
-                sentence.append(vocabulary_inv[ele.asscalar()])
-            print('Pred:\t' + ' '.join(sentence[:-1]))
+                sentence = []
+                for ele in sample[:slen]:
+                    sentence.append(vocabulary_inv[ele.asscalar()])
+                test_out.write('Pred:\t' + ' '.join(sentence[:-1]) + '\n\n')
+    print('All done')
 
 
 if __name__ == "__main__":
