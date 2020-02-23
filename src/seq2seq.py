@@ -347,6 +347,12 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
                               zip(audio_multi, words_multi, alength_multi, wlength_multi)]
                 for l in losses:
                     l.backward()
+
+                for ctx in context:
+                    if grad_clip:
+                        gluon.utils.clip_global_norm(
+                            [p.grad(ctx) for p in parameters if p.grad_req != 'null'],
+                            grad_clip)
             else:
                 with autograd.record():
                     decoder_outputs = net(audio.as_in_context(context), alength.as_in_context(context),
@@ -354,10 +360,10 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
                     L = loss(decoder_outputs, words.as_in_context(context), wlength.as_in_context(context)).sum()
                 L.backward()
 
-            if grad_clip:
-                gluon.utils.clip_global_norm(
-                    [p.grad(context) for p in parameters if p.grad_req != 'null'],
-                    grad_clip)
+                if grad_clip:
+                    gluon.utils.clip_global_norm(
+                        [p.grad(context) for p in parameters if p.grad_req != 'null'],
+                        grad_clip)
 
             trainer.step(1)
             if context != mx.cpu():
