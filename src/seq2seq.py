@@ -368,8 +368,8 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
 
             trainer.step(1, ignore_stale_grad=True)
             if context != mx.cpu():
-                log_interval_loss += mx.nd.array(losses).sum().asscalar()
-                epoch_loss += mx.nd.array(losses).sum().asscalar()
+                log_interval_loss += np.sum(losses).asscalar()
+                epoch_loss += np.sum(losses).asscalar()
             else:
                 log_interval_loss += L.asscalar()
                 epoch_loss += L.asscalar()
@@ -426,7 +426,7 @@ def main():
     parser.add_argument("--checkpoint_dir", default="checkpoints", type=str, required=False,
                         help="The output directory where the model checkpoints will be written.")
 
-    parser.add_argument("--batch_size", default=128, type=int,
+    parser.add_argument("--batch_size_per_gpu", default=128, type=int,
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--num_epochs", default=80, type=int,
                         help="Number of epochs for training.")
@@ -438,6 +438,8 @@ def main():
                         help="Number of GPUs.")
 
     args = parser.parse_args()
+
+    args.batch_size = args.batch_size_per_gpu * max(1, args.gpu_count)
 
     # Data Processing
     train_dataset = pickle.load(open(os.path.join(args.data_dir, 'train-clean-100-80.p'), 'rb'))
@@ -507,10 +509,11 @@ def main():
 
     net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=256, dec_hidden_size=1024)
     net.initialize(mx.init.Xavier(), ctx=context)
-    print(net.summary(mx.nd.random.uniform(shape=(32, 500, input_size)),
-                      mx.nd.random.uniform(shape=(32, )),
-                      mx.nd.random.uniform(shape=(32, 200)),
-                      mx.nd.random.uniform(shape=(32, ))))
+    # summary_ctx = context if context == mx.cpu() else mx.gpu(0)
+    # print(net.summary(mx.nd.random.uniform(shape=(32, 500, input_size), ctx=summary_ctx),
+    #                   mx.nd.random.uniform(shape=(32, ), ctx=summary_ctx),
+    #                   mx.nd.random.uniform(shape=(32, 200), ctx=summary_ctx),
+    #                   mx.nd.random.uniform(shape=(32, ), ctx=summary_ctx)))
 
     scorer = nlp.model.BeamSearchScorer(alpha=0, K=5, from_logits=False)
     eos_id = vocabulary['<EOS>'][0]
