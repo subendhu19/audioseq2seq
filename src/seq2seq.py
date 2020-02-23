@@ -121,12 +121,13 @@ class AudioEncoderRNN(Block):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.sub_sample_size = sub_sample_size
+        self.num_layers = 2
 
         with self.name_scope():
             self.proj = nn.Dense(hidden_size, flatten=False)
-            self.rnn1 = rnn.GRU(hidden_size, input_size=self.hidden_size)
+            self.rnn1 = rnn.GRU(hidden_size * 4, input_size=self.hidden_size, num_layers=self.num_layers)
             self.subsampler = SubSampler(self.sub_sample_size)
-            self.rnn2 = rnn.GRU(hidden_size, input_size=self.hidden_size)
+            self.rnn2 = rnn.GRU(hidden_size * 4, input_size=self.hidden_size * 4, num_layers=self.num_layers)
 
     def forward(self, input, lengths):
         hidden = self.init_hidden(len(input), input.context)
@@ -138,7 +139,7 @@ class AudioEncoderRNN(Block):
         return output.swapaxes(0, 1), sub_lengths
 
     def init_hidden(self, batchsize, ctx):
-        return [F.zeros((1, batchsize, self.hidden_size), ctx=ctx)]
+        return [F.zeros((self.num_layers, batchsize, self.hidden_size * 4), ctx=ctx)]
 
 
 class AudioEncoderTransformer(Block):
@@ -178,9 +179,9 @@ class AudioWordDecoder(Block):
 
         with self.name_scope():
             self.embedding = nn.Embedding(output_size, hidden_size)
-            self.t = TransformerDecoder(units=self.hidden_size, num_layers=1, hidden_size=self.hidden_size * 4,
+            self.t = TransformerDecoder(units=self.hidden_size, num_layers=10, hidden_size=self.hidden_size * 2,
                                         max_length=100,
-                                        num_heads=1)
+                                        num_heads=16)
             self.out = nn.Dense(output_size, in_units=self.hidden_size, flatten=False)
 
     def forward(self, input, enc_outs, enc_valid_lengths, dec_valid_lengths):
@@ -337,10 +338,10 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
             epoch_sent_num += audio.shape[1]
 
             if context != mx.cpu():
-                audio_multi = gluon.utils.split_and_load(audio, context)
-                words_multi = gluon.utils.split_and_load(words, context)
-                alength_multi = gluon.utils.split_and_load(alength, context)
-                wlength_multi = gluon.utils.split_and_load(wlength, context)
+                audio_multi = gluon.utils.split_and_load(audio, context, even_split=False)
+                words_multi = gluon.utils.split_and_load(words, context, even_split=False)
+                alength_multi = gluon.utils.split_and_load(alength, context, even_split=False)
+                wlength_multi = gluon.utils.split_and_load(wlength, context, even_split=False)
 
                 with autograd.record():
                     losses = [loss(net(a, al, w, wl), w, wl) for a, w, al, wl in
@@ -365,7 +366,7 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
                         [p.grad(context) for p in parameters if p.grad_req != 'null'],
                         grad_clip)
 
-            trainer.step(1)
+            trainer.step(1, ignore_stale_grad=True)
             if context != mx.cpu():
                 log_interval_loss += mx.nd.array(losses).sum().asscalar()
                 epoch_loss += mx.nd.array(losses).sum().asscalar()
@@ -425,9 +426,9 @@ def main():
     parser.add_argument("--checkpoint_dir", default="checkpoints", type=str, required=False,
                         help="The output directory where the model checkpoints will be written.")
 
-    parser.add_argument("--batch_size", default=32, type=int,
+    parser.add_argument("--batch_size", default=128, type=int,
                         help="Batch size per GPU/CPU for training.")
-    parser.add_argument("--num_epochs", default=2, type=int,
+    parser.add_argument("--num_epochs", default=80, type=int,
                         help="Number of epochs for training.")
     parser.add_argument("--learning_rate", default=1, type=float,
                         help="The initial learning rate.")
@@ -439,9 +440,14 @@ def main():
     args = parser.parse_args()
 
     # Data Processing
-    train_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))[:10]
-    dev_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))[:10]
-    test_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))[:10]
+    train_dataset = pickle.load(open(os.path.join(args.data_dir, 'train-clean-100-80.p'), 'rb'))
+    dev_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev-clean-80.p'), 'rb'))
+    test_dataset = pickle.load(open(os.path.join(args.data_dir, 'test-clean-80.p'), 'rb'))
+
+    # train_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))[:10]
+    # dev_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))[:10]
+    # test_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))[:10]
+
     input_size = len(train_dataset[0][1][0])
 
     global vocabulary
@@ -476,7 +482,7 @@ def main():
     for i in range(5):
         print('\t{}\t({})'.format(vocab_list[i][0], vocab_list[i][1]))
     del vocab_list
-    print('\n')
+    print('')
 
     train_dataset, train_data_lengths = preprocess_dataset(train_dataset)
     dev_dataset, dev_data_lengths = preprocess_dataset(dev_dataset)
@@ -497,8 +503,14 @@ def main():
     else:
         context = [mx.gpu(i) for i in range(args.gpu_count)]
 
-    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=16, dec_hidden_size=16)
+    print('\nRunning on {}\n'.format(context))
+
+    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=256, dec_hidden_size=1024)
     net.initialize(mx.init.Xavier(), ctx=context)
+    print(net.summary(mx.nd.random.uniform(shape=(32, 500, input_size)),
+                      mx.nd.random.uniform(shape=(32, )),
+                      mx.nd.random.uniform(shape=(32, 200)),
+                      mx.nd.random.uniform(shape=(32, ))))
 
     scorer = nlp.model.BeamSearchScorer(alpha=0, K=5, from_logits=False)
     eos_id = vocabulary['<EOS>'][0]
@@ -507,8 +519,6 @@ def main():
                                                eos_id=eos_id,
                                                scorer=scorer,
                                                max_length=50)
-
-    print('\n')
 
     train(net, context, epochs, learning_rate, log_interval, grad_clip, train_dataloader, dev_dataloader, beam_sampler,
           args.checkpoint_dir)
