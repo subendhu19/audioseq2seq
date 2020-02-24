@@ -49,7 +49,8 @@ def preprocess_dataset(dataset):
     return dataset, lengths
 
 
-def get_dataloader(train_dataset, dev_dataset, test_dataset, train_data_lengths, batch_size, bucket_num, bucket_ratio):
+def get_dataloader(train_dataset, dev_dataset, test_dataset, train_data_lengths, batch_size, bucket_num, bucket_ratio,
+                   batch_size_per_gpu):
     batchify_fn = nlp.data.batchify.Tuple(
         nlp.data.batchify.Pad(dtype='float32'),
         nlp.data.batchify.Pad(dtype='float32'),
@@ -69,12 +70,12 @@ def get_dataloader(train_dataset, dev_dataset, test_dataset, train_data_lengths,
         batchify_fn=batchify_fn)
     dev_dataloader = gluon.data.DataLoader(
         dataset=dev_dataset,
-        batch_size=batch_size,
+        batch_size=batch_size_per_gpu,
         shuffle=False,
         batchify_fn=batchify_fn)
     test_dataloader = gluon.data.DataLoader(
         dataset=test_dataset,
-        batch_size=batch_size,
+        batch_size=batch_size_per_gpu,
         shuffle=False,
         batchify_fn=batchify_fn)
     return train_dataloader, dev_dataloader, test_dataloader
@@ -344,7 +345,7 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
                 wlength_multi = gluon.utils.split_and_load(wlength, context, even_split=False)
 
                 with autograd.record():
-                    losses = [loss(net(a, al, w, wl), w, wl) for a, w, al, wl in
+                    losses = [loss(net(a, al, w, wl), w, wl).sum() for a, w, al, wl in
                               zip(audio_multi, words_multi, alength_multi, wlength_multi)]
                 for l in losses:
                     l.backward()
@@ -426,7 +427,7 @@ def main():
     parser.add_argument("--checkpoint_dir", default="checkpoints", type=str, required=False,
                         help="The output directory where the model checkpoints will be written.")
 
-    parser.add_argument("--batch_size_per_gpu", default=128, type=int,
+    parser.add_argument("--batch_size_per_gpu", default=12, type=int,
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--num_epochs", default=80, type=int,
                         help="Number of epochs for training.")
@@ -491,7 +492,7 @@ def main():
     test_dataset, test_data_lengths = preprocess_dataset(test_dataset)
 
     # Modeling
-    learning_rate, batch_size = args.learning_rate, args.batch_size
+    learning_rate, batch_size, batch_size_per_gpu = args.learning_rate, args.batch_size, args.batch_size_per_gpu
     bucket_num, bucket_ratio = 10, 0.2
     grad_clip = 10
     log_interval = 5
@@ -499,7 +500,8 @@ def main():
 
     train_dataloader, dev_dataloader, test_dataloader = get_dataloader(train_dataset, dev_dataset, test_dataset,
                                                                        train_data_lengths,
-                                                                       batch_size, bucket_num, bucket_ratio)
+                                                                       batch_size, bucket_num, bucket_ratio,
+                                                                       batch_size_per_gpu)
     if args.gpu_count == 0:
         context = mx.cpu()
     else:
