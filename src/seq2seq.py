@@ -397,16 +397,18 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
                 log_interval_loss = 0
 
         end_epoch_time = time.time()
-        test_wer = evaluate(net, context, test_dataloader, beam_sampler)
-        print('[Epoch {}] train avg loss {:.6f}, test WER {:.2f}, '
-              'throughput {:.2f}K fps\n'.format(epoch, epoch_loss / epoch_sent_num, test_wer,
+        print('[Epoch {}] train avg loss {:.6f}, '
+              'throughput {:.2f}K fps\n'.format(epoch, epoch_loss / epoch_sent_num,
                                                 epoch_wc / 1000 / (end_epoch_time - start_epoch_time)))
 
-        net.save_parameters(os.path.join(checkpoint_dir, 'epoch_{}.params'.format(epoch)))
-        if test_wer < best_test_metrics['metric']:
-            best_test_metrics['epoch'] = epoch
-            best_test_metrics['metric'] = test_wer
-            net.save_parameters(os.path.join(checkpoint_dir, 'best.params'))
+        if (epoch + 1) % 10 == 0:
+            test_wer = evaluate(net, context, test_dataloader, beam_sampler)
+            print('[Epoch {}] test WER {:.2f}, '.format(epoch, test_wer))
+            net.save_parameters(os.path.join(checkpoint_dir, 'epoch_{}.params'.format(epoch)))
+            if test_wer < best_test_metrics['metric']:
+                best_test_metrics['epoch'] = epoch
+                best_test_metrics['metric'] = test_wer
+                net.save_parameters(os.path.join(checkpoint_dir, 'best.params'))
 
     print('Training complete.')
 
