@@ -164,6 +164,7 @@ class AudioEncoderTransformer(Block):
                 self.conv.add(gluon.nn.MaxPool2D(pool_size=self.conv_pool_size))
                 self.conv.add(gluon.nn.Conv2D(channels=128, kernel_size=self.conv_kernel_size, activation='relu'))
                 self.conv.add(gluon.nn.MaxPool2D(pool_size=self.conv_pool_size))
+            self.proj = nn.Dense(self.hidden_size, flatten=False)
             self.transformer = TransformerEncoder(units=self.hidden_size, num_layers=10,
                                                   hidden_size=self.hidden_size * 2,
                                                   max_length=1000,
@@ -171,9 +172,10 @@ class AudioEncoderTransformer(Block):
 
     def forward(self, input, lengths):
         ks, ps = self.conv_kernel_size, self.conv_pool_size
-        input = self.conv(input).swapaxes(1, 2).reshape(input.shape[0], input.shape[2], -1)
+        input = self.conv(input)
+        input = input.swapaxes(1, 2).reshape(input.shape[0], input.shape[2], -1)
         lengths = mx.nd.floor((mx.nd.floor((mx.nd.floor((mx.nd.floor((lengths-ks)/ps)-ks)/ps)-ks)/ps)-ks)/ps)
-        output, _ = self.transformer(input, None, lengths)
+        output, _ = self.transformer(self.proj(input), None, lengths)
         return output, lengths
 
 
