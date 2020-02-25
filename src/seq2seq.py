@@ -312,7 +312,7 @@ def evaluate(net, context, test_dataloader, beam_sampler):
     return np.mean(all_scores)
 
 
-def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_dataloader, test_dataloader,
+def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test_dataloader,
           beam_sampler, checkpoint_dir):
     print('Starting Training...')
 
@@ -374,14 +374,13 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
                 epoch_loss += np.sum(losses).asscalar()
             else:
                 epoch_loss += L.asscalar()
-            if (i + 1) % log_interval == 0:
-                train_enumerator.set_description(
-                    '[Batch {}/{}] elapsed {:.2f} s, '
-                    'avg loss {:.6f}, throughput {:.2f}K fps'.format(
-                        i + 1, len(train_dataloader),
-                        time.time() - start_epoch_time,
-                        epoch_loss / epoch_sent_num,
-                        epoch_wc / 1000 / (time.time() - start_epoch_time)))
+            train_enumerator.set_description(
+                '[Batch {}/{}] elapsed {:.2f} s, '
+                'avg loss {:.6f}, throughput {:.2f}K fps'.format(
+                    i + 1, len(train_dataloader),
+                    time.time() - start_epoch_time,
+                    epoch_loss / epoch_sent_num,
+                    epoch_wc / 1000 / (time.time() - start_epoch_time)))
 
         end_epoch_time = time.time()
         print('[Epoch {}] train avg loss {:.6f}, '
@@ -493,7 +492,6 @@ def main():
     learning_rate, batch_size, batch_size_per_gpu = args.learning_rate, args.batch_size, args.batch_size_per_gpu
     bucket_num, bucket_ratio = 10, 0.2
     grad_clip = 10
-    log_interval = 5
     epochs = args.num_epochs
 
     train_dataloader, dev_dataloader, test_dataloader = get_dataloader(train_dataset, dev_dataset, test_dataset,
@@ -523,7 +521,7 @@ def main():
                                                scorer=scorer,
                                                max_length=50)
 
-    train(net, context, epochs, learning_rate, log_interval, grad_clip, train_dataloader, dev_dataloader, beam_sampler,
+    train(net, context, epochs, learning_rate, grad_clip, train_dataloader, dev_dataloader, beam_sampler,
           args.checkpoint_dir)
     net.save_parameters(os.path.join(args.checkpoint_dir, 'final.params'))
 
