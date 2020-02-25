@@ -518,7 +518,7 @@ def main():
 
     print('\nRunning on {}\n'.format(context))
 
-    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=256, dec_hidden_size=1024)
+    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=1024, dec_hidden_size=1024)
     net.initialize(mx.init.Xavier(), ctx=context)
     # summary_ctx = context if context == mx.cpu() else mx.gpu(0)
     # print(net.summary(mx.nd.random.uniform(shape=(32, 500, input_size), ctx=summary_ctx),
