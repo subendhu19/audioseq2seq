@@ -150,25 +150,31 @@ class AudioEncoderTransformer(Block):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.sub_sample_size = sub_sample_size
+        self.conv_kernel_size = 3
+        self.conv_pool_size = 2
 
         with self.name_scope():
-            self.proj = nn.Dense(hidden_size, flatten=False)
-            self.t1 = TransformerEncoder(units=self.hidden_size, num_layers=8, hidden_size=self.hidden_size * 4,
-                                         max_length=500,
-                                         num_heads=8)
-            self.subsampler = SubSampler(self.sub_sample_size)
-            self.t2 = TransformerEncoder(units=self.hidden_size, num_layers=8, hidden_size=self.hidden_size * 4,
-                                         max_length=500,
-                                         num_heads=8)
+            self.conv = gluon.nn.Sequential()
+            with self.conv.name_scope():
+                self.conv.add(gluon.nn.Conv2D(channels=64, kernel_size=self.conv_kernel_size, activation='relu'))
+                self.conv.add(gluon.nn.MaxPool2D(pool_size=self.conv_pool_size))
+                self.conv.add(gluon.nn.Conv2D(channels=64, kernel_size=self.conv_kernel_size, activation='relu'))
+                self.conv.add(gluon.nn.MaxPool2D(pool_size=self.conv_pool_size))
+                self.conv.add(gluon.nn.Conv2D(channels=128, kernel_size=self.conv_kernel_size, activation='relu'))
+                self.conv.add(gluon.nn.MaxPool2D(pool_size=self.conv_pool_size))
+                self.conv.add(gluon.nn.Conv2D(channels=128, kernel_size=self.conv_kernel_size, activation='relu'))
+                self.conv.add(gluon.nn.MaxPool2D(pool_size=self.conv_pool_size))
+            self.transformer = TransformerEncoder(units=self.hidden_size, num_layers=10,
+                                                  hidden_size=self.hidden_size * 2,
+                                                  max_length=1000,
+                                                  num_heads=16)
 
     def forward(self, input, lengths):
-        input = self.proj(input)
-        output, _ = self.t1(input, None, lengths)
-        output = output.swapaxes(0, 1)
-        subsampled, sub_lengths = self.subsampler(output, lengths)
-        subsampled = subsampled.swapaxes(0, 1)
-        output, _ = self.t2(subsampled, None, sub_lengths)
-        return output, sub_lengths
+        ks, ps = self.conv_kernel_size, self.conv_pool_size
+        input = self.conv(input).swapaxes(1, 2).reshape(input.shape[0], input.shape[2], -1)
+        lengths = mx.nd.floor((mx.nd.floor((mx.nd.floor((mx.nd.floor((lengths-ks)/ps)-ks)/ps)-ks)/ps)-ks)/ps)
+        output, _ = self.transformer(input, None, lengths)
+        return output, lengths
 
 
 class AudioWordDecoder(Block):
@@ -180,15 +186,16 @@ class AudioWordDecoder(Block):
 
         with self.name_scope():
             self.embedding = nn.Embedding(output_size, hidden_size)
-            self.t = TransformerDecoder(units=self.hidden_size, num_layers=10, hidden_size=self.hidden_size * 2,
-                                        max_length=100,
-                                        num_heads=16)
+            self.transformer = TransformerDecoder(units=self.hidden_size, num_layers=10,
+                                                  hidden_size=self.hidden_size * 2,
+                                                  max_length=100,
+                                                  num_heads=16)
             self.out = nn.Dense(output_size, in_units=self.hidden_size, flatten=False)
 
     def forward(self, input, enc_outs, enc_valid_lengths, dec_valid_lengths):
         output = self.embedding(input)
-        dec_states = self.t.init_state_from_encoder(enc_outs, enc_valid_lengths)
-        output, _, _ = self.t.decode_seq(output, dec_states, dec_valid_lengths)
+        dec_states = self.transformer.init_state_from_encoder(enc_outs, enc_valid_lengths)
+        output, _, _ = self.transformer.decode_seq(output, dec_states, dec_valid_lengths)
         output = self.out(output)
         return output
 
@@ -203,11 +210,11 @@ class Seq2Seq(Block):
         self.dec_hidden_size = dec_hidden_size
 
         with self.name_scope():
-            self.encoder = AudioEncoderRNN(input_size=input_size, hidden_size=enc_hidden_size)
+            self.encoder = AudioEncoderTransformer(input_size=input_size, hidden_size=enc_hidden_size)
             self.decoder = AudioWordDecoder(hidden_size=dec_hidden_size, output_size=output_size)
 
     def forward(self, audio, alengths, words, wlengths):
-        encoder_outputs, encoder_out_lengths = self.encoder(audio, alengths)
+        encoder_outputs, encoder_out_lengths = self.encoder(audio.expand_dims(1), alengths)
         decoder_outputs = self.decoder(words, encoder_outputs, encoder_out_lengths, wlengths)
         return decoder_outputs
 
