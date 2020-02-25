@@ -334,17 +334,10 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
         epoch_sent_num = 0
         epoch_wc = 0
 
-        start_log_interval_time = time.time()
-        log_interval_wc = 0
-        log_interval_sent_num = 0
-        log_interval_loss = 0.0
-
         train_enumerator = tqdm(enumerate(train_dataloader), total=len(train_dataloader))
         for i, (audio, words, alength, wlength) in train_enumerator:
             wc = alength.sum().asscalar()
-            log_interval_wc += wc
             epoch_wc += wc
-            log_interval_sent_num += audio.shape[1]
             epoch_sent_num += audio.shape[1]
 
             if context != mx.cpu():
@@ -378,23 +371,17 @@ def train(net, context, epochs, learning_rate, log_interval, grad_clip, train_da
 
             trainer.step(1, ignore_stale_grad=True)
             if context != mx.cpu():
-                log_interval_loss += np.sum(losses).asscalar()
                 epoch_loss += np.sum(losses).asscalar()
             else:
-                log_interval_loss += L.asscalar()
                 epoch_loss += L.asscalar()
             if (i + 1) % log_interval == 0:
                 train_enumerator.set_description(
                     '[Batch {}/{}] elapsed {:.2f} s, '
                     'avg loss {:.6f}, throughput {:.2f}K fps'.format(
                         i + 1, len(train_dataloader),
-                        time.time() - start_log_interval_time,
-                        log_interval_loss / log_interval_sent_num,
-                        log_interval_wc / 1000 / (time.time() - start_log_interval_time)))
-                start_log_interval_time = time.time()
-                log_interval_wc = 0
-                log_interval_sent_num = 0
-                log_interval_loss = 0
+                        time.time() - start_epoch_time,
+                        epoch_loss / epoch_sent_num,
+                        epoch_wc / 1000 / (time.time() - start_epoch_time)))
 
         end_epoch_time = time.time()
         print('[Epoch {}] train avg loss {:.6f}, '
