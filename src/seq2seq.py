@@ -299,7 +299,8 @@ def evaluate(net, context, test_dataloader, beam_sampler):
     print('Evaluating...')
     test_enumerator = tqdm(enumerate(test_dataloader), total=len(test_dataloader))
     for i, (audio, words, alength, wlength) in test_enumerator:
-        encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context), alength.as_in_context(context))
+        encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context).expand_dims(1),
+                                                           alength.as_in_context(context))
         outputs = mx.nd.array([2] * words.shape[0]).as_in_context(context)
         decoder_states = net.decoder.t.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
         samples, scores, valid_lengths = beam_sampler(outputs, decoder_states)
@@ -529,7 +530,7 @@ def main():
                                                decoder=BeamDecoder(net),
                                                eos_id=eos_id,
                                                scorer=scorer,
-                                               max_length=100)
+                                               max_length=50)
 
     net.load_parameters(filename=os.path.join(args.checkpoint_dir, 'best.params'), ctx=context)
 
@@ -542,7 +543,7 @@ def main():
         if context != mx.cpu():
             context = mx.gpu(0)
         for i, (audio, words, alength, wlength) in enumerate(test_dataloader):
-            encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context),
+            encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context).expand_dims(1),
                                                                alength.as_in_context(context))
             outputs = mx.nd.array([2] * words.shape[0]).as_in_context(context)
             decoder_states = net.decoder.t.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
