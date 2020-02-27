@@ -29,7 +29,7 @@ random.seed(123)
 np.random.seed(123)
 mx.random.seed(123)
 
-
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -393,8 +393,8 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
 
         end_epoch_time = time.time()
         logger.info('[Epoch {}] train avg loss {:.6f}, '
-              'throughput {:.2f}K fps\n'.format(epoch, epoch_loss / epoch_sent_num,
-                                                epoch_wc / 1000 / (end_epoch_time - start_epoch_time)))
+                    'throughput {:.2f}K fps\n'.format(epoch, epoch_loss / epoch_sent_num,
+                                                      epoch_wc / 1000 / (end_epoch_time - start_epoch_time)))
 
         if (epoch + 1) % 10 == 0:
             test_wer = evaluate(net, context, test_dataloader, beam_sampler)

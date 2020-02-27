@@ -10,6 +10,7 @@ import gluonnlp as nlp
 from src.train_and_test import Seq2Seq, BeamDecoder, evaluate
 import logging
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
