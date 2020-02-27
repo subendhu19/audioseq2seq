@@ -22,11 +22,15 @@ import nltk
 from jiwer import wer
 
 from tqdm import tqdm
+import logging
 
 warnings.filterwarnings('ignore')
 random.seed(123)
 np.random.seed(123)
 mx.random.seed(123)
+
+
+logger = logging.getLogger(__name__)
 
 
 def preprocess(x):
@@ -45,7 +49,7 @@ def preprocess_dataset(dataset):
         dataset = gluon.data.SimpleDataset(pool.map(preprocess, dataset))
         lengths = gluon.data.SimpleDataset(pool.map(get_length, dataset))
     end = time.time()
-    print('Done! Processing Time={:.2f}s, #Samples={}'.format(end - start, len(dataset)))
+    logger.info('Done! Processing Time={:.2f}s, #Samples={}'.format(end - start, len(dataset)))
     return dataset, lengths
 
 
@@ -62,7 +66,7 @@ def get_dataloader(train_dataset, dev_dataset, test_dataset, train_data_lengths,
         num_buckets=bucket_num,
         ratio=bucket_ratio,
         shuffle=True)
-    print(batch_sampler.stats())
+    logger.info(batch_sampler.stats())
 
     train_dataloader = gluon.data.DataLoader(
         dataset=train_dataset,
@@ -300,7 +304,7 @@ def evaluate(net, context, test_dataloader, beam_sampler):
     if context != mx.cpu():
         context = mx.gpu(0)
     all_scores = []
-    print('Evaluating...')
+    logger.info('Evaluating...')
     test_enumerator = tqdm(enumerate(test_dataloader), total=len(test_dataloader))
     for i, (audio, words, alength, wlength) in test_enumerator:
         encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context).expand_dims(1),
@@ -319,7 +323,7 @@ def evaluate(net, context, test_dataloader, beam_sampler):
 
 def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test_dataloader,
           beam_sampler, checkpoint_dir):
-    print('Starting Training...')
+    logger.info('Starting Training...')
 
     # scheduler = TriangularSchedule(min_lr=learning_rate * 1e-2, max_lr=learning_rate, cycle_length=10,
     #                                inc_fraction=0.2)
@@ -333,7 +337,7 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
     best_test_metrics = {'epoch': 0, 'metric': 1}
 
     for epoch in range(epochs):
-        print('Epoch {}'.format(epoch))
+        logger.info('Epoch {}'.format(epoch))
         start_epoch_time = time.time()
         epoch_loss = 0.0
         epoch_sent_num = 0
@@ -388,25 +392,25 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
                     epoch_wc / 1000 / (time.time() - start_epoch_time)))
 
         end_epoch_time = time.time()
-        print('[Epoch {}] train avg loss {:.6f}, '
+        logger.info('[Epoch {}] train avg loss {:.6f}, '
               'throughput {:.2f}K fps\n'.format(epoch, epoch_loss / epoch_sent_num,
                                                 epoch_wc / 1000 / (end_epoch_time - start_epoch_time)))
 
         if (epoch + 1) % 10 == 0:
             test_wer = evaluate(net, context, test_dataloader, beam_sampler)
-            print('[Epoch {}] test WER {:.2f}\n'.format(epoch, test_wer))
+            logger.info('[Epoch {}] test WER {:.2f}\n'.format(epoch, test_wer))
             net.save_parameters(os.path.join(checkpoint_dir, 'epoch_{}.params'.format(epoch)))
             if test_wer < best_test_metrics['metric']:
                 best_test_metrics['epoch'] = epoch
                 best_test_metrics['metric'] = test_wer
                 net.save_parameters(os.path.join(checkpoint_dir, 'best.params'))
 
-    print('Training complete.')
+    logger.info('Training complete.')
 
 
 def generate_sequences(sampler, inputs, begin_states, num_print_outcomes):
     samples, scores, valid_lengths = sampler(inputs, begin_states)
-    print('Generation Result:')
+    logger.info('Generation Result:')
 
     for sample_id in range(samples.shape[0]):
         sample = samples[sample_id].asnumpy()
@@ -417,7 +421,7 @@ def generate_sequences(sampler, inputs, begin_states, num_print_outcomes):
             sentence = []
             for ele in sample[i][:valid_length[i]]:
                 sentence.append(vocabulary_inv[ele])
-            print([' '.join(sentence), score[i]])
+            logger.info([' '.join(sentence), score[i]])
 
 
 def main():
@@ -460,7 +464,7 @@ def main():
 
     if 'cached_vocab.p' in os.listdir(args.data_dir):
         vocabulary, vocabulary_inv = pickle.load(open(os.path.join(args.data_dir, 'cached_vocab.p'), 'rb'))
-        print('Vocabulary loaded from cached file')
+        logger.info('Vocabulary loaded from cached file')
     else:
         vocabulary = {'<pad>': [0, 1], '<unk>': [1, 1], '<BOS>': [2, 1], '<EOS>': [3, 1]}
         for item in train_dataset + dev_dataset + test_dataset:
@@ -474,20 +478,20 @@ def main():
         vocabulary_inv = {}
         for key in vocabulary:
             vocabulary_inv[vocabulary[key][0]] = key
-        print('Vocabulary built for the first time')
+        logger.info('Vocabulary built for the first time')
         pickle.dump((vocabulary, vocabulary_inv), open(os.path.join(args.data_dir, 'cached_vocab.p'), 'wb'))
 
     vocab_list = [(word, vocabulary[word][1]) for word in vocabulary]
-    print('Vocabulary Statistics:')
-    print('Total: {}'.format(len(vocabulary)))
+    logger.info('Vocabulary Statistics:')
+    logger.info('Total: {}'.format(len(vocabulary)))
 
     vocab_list.sort(key=lambda x: x[1], reverse=True)
-    print('Max count: {} ({})'.format(vocab_list[0][1], vocab_list[0][0]))
-    print('Most frequent words: ')
+    logger.info('Max count: {} ({})'.format(vocab_list[0][1], vocab_list[0][0]))
+    logger.info('Most frequent words: ')
     for i in range(5):
-        print('\t{}\t({})'.format(vocab_list[i][0], vocab_list[i][1]))
+        logger.info('\t{}\t({})'.format(vocab_list[i][0], vocab_list[i][1]))
     del vocab_list
-    print('')
+    logger.info('')
 
     train_dataset, train_data_lengths = preprocess_dataset(train_dataset)
     dev_dataset, dev_data_lengths = preprocess_dataset(dev_dataset)
@@ -508,12 +512,12 @@ def main():
     else:
         context = [mx.gpu(i) for i in range(args.gpu_count)]
 
-    print('\nRunning on {}\n'.format(context))
+    logger.info('\nRunning on {}\n'.format(context))
 
     net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=1024, dec_hidden_size=1024)
     net.initialize(mx.init.Xavier(), ctx=context)
     # summary_ctx = context if context == mx.cpu() else mx.gpu(0)
-    # print(net.summary(mx.nd.random.uniform(shape=(32, 500, input_size), ctx=summary_ctx),
+    # logger.info(net.summary(mx.nd.random.uniform(shape=(32, 500, input_size), ctx=summary_ctx),
     #                   mx.nd.random.uniform(shape=(32, ), ctx=summary_ctx),
     #                   mx.nd.random.uniform(shape=(32, 200), ctx=summary_ctx),
     #                   mx.nd.random.uniform(shape=(32, ), ctx=summary_ctx)))
@@ -538,7 +542,7 @@ def main():
 
     net.load_parameters(filename=os.path.join(args.checkpoint_dir, 'best.params'), ctx=context)
 
-    print('\nWriting test output to file...')
+    logger.info('\nWriting test output to file...')
     with open(args.outfile, 'w') as test_out:
         test_metric = evaluate(net, context, test_dataloader, beam_sampler)
         test_out.write('Test WER on best dev model: {}'.format(test_metric) + '\n\n')
@@ -571,7 +575,7 @@ def main():
                 for ele in sample[:slen]:
                     sentence.append(vocabulary_inv[ele.asscalar()])
                 test_out.write('Pred:\t' + ' '.join(sentence[:-1]) + '\n\n')
-    print('All done')
+    logger.info('All done')
 
 
 if __name__ == "__main__":

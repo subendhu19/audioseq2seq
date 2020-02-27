@@ -8,6 +8,9 @@ from mxnet import gluon
 import numpy as np
 import gluonnlp as nlp
 from src.train_and_test import Seq2Seq, BeamDecoder, evaluate
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def preprocess(x):
@@ -26,7 +29,7 @@ def preprocess_dataset(dataset):
         dataset = gluon.data.SimpleDataset(pool.map(preprocess, dataset))
         lengths = gluon.data.SimpleDataset(pool.map(get_length, dataset))
     end = time.time()
-    print('Done! Processing Time={:.2f}s, #Samples={}'.format(end - start, len(dataset)))
+    logger.info('Done! Processing Time={:.2f}s, #Samples={}'.format(end - start, len(dataset)))
     return dataset, lengths
 
 
@@ -43,7 +46,7 @@ def get_dataloader(test_dataset, test_data_lengths, batch_size, bucket_num, buck
         num_buckets=bucket_num,
         ratio=bucket_ratio,
         shuffle=True)
-    print(batch_sampler.stats())
+    logger.info(batch_sampler.stats())
 
     test_dataloader = gluon.data.DataLoader(
         dataset=test_dataset,
@@ -83,7 +86,7 @@ def main():
     global vocabulary_inv
 
     vocabulary, vocabulary_inv = pickle.load(open(os.path.join(args.data_dir, 'cached_vocab.p'), 'rb'))
-    print('Vocabulary loaded from cached file')
+    logger.info('Vocabulary loaded from cached file')
 
     test_dataset, test_data_lengths = preprocess_dataset(test_dataset)
 
@@ -101,7 +104,7 @@ def main():
     else:
         context = [mx.gpu(i) for i in range(args.gpu_count)]
 
-    print('\nRunning on {}\n'.format(context))
+    logger.info('\nRunning on {}\n'.format(context))
 
     net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=1024, dec_hidden_size=1024)
     net.initialize(mx.init.Xavier(), ctx=context)
@@ -117,7 +120,7 @@ def main():
 
     net.load_parameters(filename=os.path.join(args.checkpoint_dir, 'best.params'), ctx=context)
 
-    print('Writing test output to file...')
+    logger.info('Writing test output to file...')
     with open(args.outfile, 'w') as test_out:
         test_metric = evaluate(net, context, test_dataloader, beam_sampler)
         test_out.write('Test WER on best dev model: {}'.format(test_metric) + '\n\n')
@@ -150,7 +153,7 @@ def main():
                 for ele in sample[:slen]:
                     sentence.append(vocabulary_inv[ele.asscalar()])
                 test_out.write('Pred:\t' + ' '.join(sentence[:-1]) + '\n\n')
-    print('All done')
+    logger.info('All done')
 
 
 if __name__ == "__main__":
