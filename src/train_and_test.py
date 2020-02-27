@@ -160,22 +160,25 @@ class AudioEncoderTransformer(Block):
                 self.conv.add(gluon.nn.MaxPool2D(pool_size=self.conv_pool_size))
                 self.conv.add(gluon.nn.Conv2D(channels=64, kernel_size=self.conv_kernel_size, activation='relu'))
                 self.conv.add(gluon.nn.MaxPool2D(pool_size=self.conv_pool_size))
+                self.conv.add(gluon.nn.Dropout(.15))
                 self.conv.add(gluon.nn.Conv2D(channels=128, kernel_size=self.conv_kernel_size, activation='relu'))
                 self.conv.add(gluon.nn.MaxPool2D(pool_size=self.conv_pool_size))
                 self.conv.add(gluon.nn.Conv2D(channels=128, kernel_size=self.conv_kernel_size, activation='relu'))
                 self.conv.add(gluon.nn.MaxPool2D(pool_size=self.conv_pool_size))
+                self.conv.add(gluon.nn.Dropout(.15))
             self.proj = nn.Dense(self.hidden_size, flatten=False)
+            self.dropout = gluon.nn.Dropout(.15)
             self.transformer = TransformerEncoder(units=self.hidden_size, num_layers=10,
                                                   hidden_size=self.hidden_size * 2,
                                                   max_length=1000,
-                                                  num_heads=16)
+                                                  num_heads=16, dropout=.15)
 
     def forward(self, input, lengths):
         ks, ps = self.conv_kernel_size, self.conv_pool_size
         input = self.conv(input)
         input = input.swapaxes(1, 2).reshape(input.shape[0], input.shape[2], -1)
         lengths = mx.nd.floor((mx.nd.floor((mx.nd.floor((mx.nd.floor((lengths-ks)/ps)-ks)/ps)-ks)/ps)-ks)/ps)
-        output, _ = self.transformer(self.proj(input), None, lengths)
+        output, _ = self.transformer(self.dropout(self.proj(input)), None, lengths)
         return output, lengths
 
 
@@ -188,14 +191,15 @@ class AudioWordDecoder(Block):
 
         with self.name_scope():
             self.embedding = nn.Embedding(output_size, hidden_size)
+            self.dropout = gluon.nn.Dropout(.15)
             self.transformer = TransformerDecoder(units=self.hidden_size, num_layers=10,
                                                   hidden_size=self.hidden_size * 2,
                                                   max_length=100,
-                                                  num_heads=16)
+                                                  num_heads=16, dropout=.15)
             self.out = nn.Dense(output_size, in_units=self.hidden_size, flatten=False)
 
     def forward(self, input, enc_outs, enc_valid_lengths, dec_valid_lengths):
-        output = self.embedding(input)
+        output = self.dropout(self.embedding(input))
         dec_states = self.transformer.init_state_from_encoder(enc_outs, enc_valid_lengths)
         output, _, _ = self.transformer.decode_seq(output, dec_states, dec_valid_lengths)
         output = self.out(output)
@@ -350,8 +354,8 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
                 with autograd.record():
                     losses = [loss(net(a, al, w, wl), w, wl).sum() for a, w, al, wl in
                               zip(audio_multi, words_multi, alength_multi, wlength_multi)]
-                for l in losses:
-                    l.backward()
+                    for l in losses:
+                        l.backward()
 
                 for ctx in context:
                     if grad_clip:
@@ -363,7 +367,7 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
                     decoder_outputs = net(audio.as_in_context(context), alength.as_in_context(context),
                                           words.as_in_context(context), wlength.as_in_context(context))
                     L = loss(decoder_outputs, words.as_in_context(context), wlength.as_in_context(context)).sum()
-                L.backward()
+                    L.backward()
 
                 if grad_clip:
                     gluon.utils.clip_global_norm(
@@ -390,7 +394,7 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
 
         if (epoch + 1) % 10 == 0:
             test_wer = evaluate(net, context, test_dataloader, beam_sampler)
-            print('[Epoch {}] test WER {:.2f}, '.format(epoch, test_wer))
+            print('[Epoch {}] test WER {:.2f}\n'.format(epoch, test_wer))
             net.save_parameters(os.path.join(checkpoint_dir, 'epoch_{}.params'.format(epoch)))
             if test_wer < best_test_metrics['metric']:
                 best_test_metrics['epoch'] = epoch
@@ -534,7 +538,7 @@ def main():
 
     net.load_parameters(filename=os.path.join(args.checkpoint_dir, 'best.params'), ctx=context)
 
-    print('Writing test output to file...')
+    print('\nWriting test output to file...')
     with open(args.outfile, 'w') as test_out:
         test_metric = evaluate(net, context, test_dataloader, beam_sampler)
         test_out.write('Test WER on best dev model: {}'.format(test_metric) + '\n\n')
