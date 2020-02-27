@@ -91,10 +91,11 @@ def main():
     batch_size, batch_size_per_gpu = args.batch_size, args.batch_size_per_gpu
     bucket_num, bucket_ratio = 10, 0.2
 
-    train_dataloader, dev_dataloader, test_dataloader = get_dataloader(test_dataset,
-                                                                       test_data_lengths,
-                                                                       batch_size, bucket_num, bucket_ratio,
-                                                                       batch_size_per_gpu)
+    test_dataloader = get_dataloader(test_dataset,
+                                     test_data_lengths,
+                                     batch_size, bucket_num, bucket_ratio,
+                                     batch_size_per_gpu)
+
     if args.gpu_count == 0:
         context = mx.cpu()
     else:
