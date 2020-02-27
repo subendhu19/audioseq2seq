@@ -302,7 +302,7 @@ def evaluate(net, context, test_dataloader, beam_sampler):
         encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context).expand_dims(1),
                                                            alength.as_in_context(context))
         outputs = mx.nd.array([2] * words.shape[0]).as_in_context(context)
-        decoder_states = net.decoder.t.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
+        decoder_states = net.decoder.transformer.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
         samples, scores, valid_lengths = beam_sampler(outputs, decoder_states)
         best_samples = samples[:, 0, 1:]
         best_vlens = valid_lengths[:, 0]
@@ -546,7 +546,7 @@ def main():
             encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context).expand_dims(1),
                                                                alength.as_in_context(context))
             outputs = mx.nd.array([2] * words.shape[0]).as_in_context(context)
-            decoder_states = net.decoder.t.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
+            decoder_states = net.decoder.transformer.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
             samples, scores, valid_lengths = beam_sampler(outputs, decoder_states)
             samples = samples[:, 0, 1:]
             valid_lengths = valid_lengths[:, 0] - 1
