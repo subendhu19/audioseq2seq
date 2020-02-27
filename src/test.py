@@ -67,6 +67,8 @@ def main():
 
     parser.add_argument("--outfile", default="test_predictions.txt", type=str, required=False,
                         help="The name of the output file.")
+    parser.add_argument("--gpu_count", default=1, type=int,
+                        help="Number of GPUs.")
 
     args = parser.parse_args()
 
