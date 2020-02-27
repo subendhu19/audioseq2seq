@@ -251,7 +251,7 @@ class BeamDecoder(object):
 
     def __call__(self, outputs, dec_states):
         outputs = self._model.decoder.embedding(outputs)
-        outputs, new_states, _ = self._model.decoder.t(outputs, dec_states)
+        outputs, new_states, _ = self._model.decoder.transformer(outputs, dec_states)
         return self._model.decoder.out(outputs), new_states
 
 
