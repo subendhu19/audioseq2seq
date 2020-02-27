@@ -105,7 +105,7 @@ def main():
     else:
         context = [mx.gpu(i) for i in range(args.gpu_count)]
 
-    logger.info('\nRunning on {}\n'.format(context))
+    logger.info('Running on {}\n'.format(context))
 
     net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=1024, dec_hidden_size=1024)
     net.initialize(mx.init.Xavier(), ctx=context)

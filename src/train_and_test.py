@@ -405,7 +405,7 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
                 best_test_metrics['metric'] = test_wer
                 net.save_parameters(os.path.join(checkpoint_dir, 'best.params'))
 
-    logger.info('Training complete.')
+    logger.info('Training complete.\n')
 
 
 def generate_sequences(sampler, inputs, begin_states, num_print_outcomes):
@@ -491,7 +491,6 @@ def main():
     for i in range(5):
         logger.info('\t{}\t({})'.format(vocab_list[i][0], vocab_list[i][1]))
     del vocab_list
-    logger.info('')
 
     train_dataset, train_data_lengths = preprocess_dataset(train_dataset)
     dev_dataset, dev_data_lengths = preprocess_dataset(dev_dataset)
@@ -512,7 +511,7 @@ def main():
     else:
         context = [mx.gpu(i) for i in range(args.gpu_count)]
 
-    logger.info('\nRunning on {}\n'.format(context))
+    logger.info('Running on {}\n'.format(context))
 
     net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=1024, dec_hidden_size=1024)
     net.initialize(mx.init.Xavier(), ctx=context)
@@ -542,7 +541,7 @@ def main():
 
     net.load_parameters(filename=os.path.join(args.checkpoint_dir, 'best.params'), ctx=context)
 
-    logger.info('\nWriting test output to file...')
+    logger.info('Writing test output to file...')
     with open(args.outfile, 'w') as test_out:
         test_metric = evaluate(net, context, test_dataloader, beam_sampler)
         test_out.write('Test WER on best dev model: {}'.format(test_metric) + '\n\n')
