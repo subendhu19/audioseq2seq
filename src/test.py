@@ -88,7 +88,7 @@ def main():
     test_dataset, test_data_lengths = preprocess_dataset(test_dataset)
 
     # Modeling
-    learning_rate, batch_size, batch_size_per_gpu = args.learning_rate, args.batch_size, args.batch_size_per_gpu
+    batch_size, batch_size_per_gpu = args.batch_size, args.batch_size_per_gpu
     bucket_num, bucket_ratio = 10, 0.2
 
     train_dataloader, dev_dataloader, test_dataloader = get_dataloader(test_dataset,
