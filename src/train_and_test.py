@@ -220,11 +220,11 @@ class Seq2Seq(Block):
         self.dec_hidden_size = dec_hidden_size
 
         with self.name_scope():
-            self.encoder = AudioEncoderTransformer(input_size=input_size, hidden_size=enc_hidden_size)
+            self.encoder = AudioEncoderRNN(input_size=input_size, hidden_size=enc_hidden_size)
             self.decoder = AudioWordDecoder(hidden_size=dec_hidden_size, output_size=output_size)
 
     def forward(self, audio, alengths, words, wlengths):
-        encoder_outputs, encoder_out_lengths = self.encoder(audio.expand_dims(1), alengths)
+        encoder_outputs, encoder_out_lengths = self.encoder(audio, alengths)
         decoder_outputs = self.decoder(words, encoder_outputs, encoder_out_lengths, wlengths)
         return decoder_outputs
 
@@ -307,7 +307,7 @@ def evaluate(net, context, test_dataloader, beam_sampler):
     logger.info('Evaluating...')
     test_enumerator = tqdm(enumerate(test_dataloader), total=len(test_dataloader))
     for i, (audio, words, alength, wlength) in test_enumerator:
-        encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context).expand_dims(1),
+        encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context),
                                                            alength.as_in_context(context))
         outputs = mx.nd.array([2] * words.shape[0]).as_in_context(context)
         decoder_states = net.decoder.transformer.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
@@ -553,7 +553,7 @@ def main():
         if context != mx.cpu():
             context = mx.gpu(0)
         for i, (audio, words, alength, wlength) in enumerate(test_dataloader):
-            encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context).expand_dims(1),
+            encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context),
                                                                alength.as_in_context(context))
             outputs = mx.nd.array([2] * words.shape[0]).as_in_context(context)
             decoder_states = net.decoder.transformer.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
