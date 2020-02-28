@@ -54,7 +54,7 @@ def preprocess_dataset(dataset):
 
 
 def get_dataloader(train_dataset, dev_dataset, test_dataset, train_data_lengths, batch_size, bucket_num, bucket_ratio,
-                   batch_size_per_gpu):
+                   batch_size_per_gpu, num_shards):
     batchify_fn = nlp.data.batchify.Tuple(
         nlp.data.batchify.Pad(dtype='float32'),
         nlp.data.batchify.Pad(dtype='float32'),
@@ -65,7 +65,8 @@ def get_dataloader(train_dataset, dev_dataset, test_dataset, train_data_lengths,
         batch_size=batch_size,
         num_buckets=bucket_num,
         ratio=bucket_ratio,
-        shuffle=True)
+        shuffle=True,
+        num_shards=num_shards)
     logger.info(batch_sampler.stats())
 
     train_dataloader = gluon.data.DataLoader(
@@ -347,17 +348,24 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
         for i, (audio, words, alength, wlength) in train_enumerator:
             wc = alength.sum().asscalar()
             epoch_wc += wc
-            epoch_sent_num += audio.shape[1]
 
             if context != mx.cpu():
-                audio_multi = gluon.utils.split_and_load(audio, context, even_split=False)
-                words_multi = gluon.utils.split_and_load(words, context, even_split=False)
-                alength_multi = gluon.utils.split_and_load(alength, context, even_split=False)
-                wlength_multi = gluon.utils.split_and_load(wlength, context, even_split=False)
+                epoch_sent_num += audio[0].shape[0]
+
+                # audio_multi = gluon.utils.split_and_load(audio, context, even_split=False)
+                # words_multi = gluon.utils.split_and_load(words, context, even_split=False)
+                # alength_multi = gluon.utils.split_and_load(alength, context, even_split=False)
+                # wlength_multi = gluon.utils.split_and_load(wlength, context, even_split=False)
 
                 with autograd.record():
-                    losses = [loss(net(a, al, w, wl), w, wl).sum() for a, w, al, wl in
-                              zip(audio_multi, words_multi, alength_multi, wlength_multi)]
+                    # losses = [loss(net(a, al, w, wl), w, wl).sum() for a, w, al, wl in
+                    #           zip(audio_multi, words_multi, alength_multi, wlength_multi)]
+                    losses = [loss(net(audio[i].as_in_context(context[i]),
+                                       alength[i].as_in_context(context[i]),
+                                       words[i].as_in_context(context[i]),
+                                       wlength[i].as_in_context(context[i])),
+                                   words[i].as_in_context(context[i]),
+                                   wlength[i].as_in_context(context[i])).sum() for i in range(len(context))]
                     for l in losses:
                         l.backward()
 
@@ -367,6 +375,8 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
                             [p.grad(ctx) for p in parameters if p.grad_req != 'null'],
                             grad_clip)
             else:
+                epoch_sent_num += audio.shape[0]
+
                 with autograd.record():
                     decoder_outputs = net(audio.as_in_context(context), alength.as_in_context(context),
                                           words.as_in_context(context), wlength.as_in_context(context))
@@ -505,7 +515,7 @@ def main():
     train_dataloader, dev_dataloader, test_dataloader = get_dataloader(train_dataset, dev_dataset, test_dataset,
                                                                        train_data_lengths,
                                                                        batch_size, bucket_num, bucket_ratio,
-                                                                       batch_size_per_gpu)
+                                                                       batch_size_per_gpu, args.gpu_count)
     if args.gpu_count == 0:
         context = mx.cpu()
     else:
