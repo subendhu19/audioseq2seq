@@ -65,8 +65,7 @@ def get_dataloader(train_dataset, dev_dataset, test_dataset, train_data_lengths,
         batch_size=batch_size,
         num_buckets=bucket_num,
         ratio=bucket_ratio,
-        shuffle=True,
-        num_shards=num_shards)
+        shuffle=True)
     logger.info(batch_sampler.stats())
 
     train_dataloader = gluon.data.DataLoader(
@@ -352,20 +351,14 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
             if context != mx.cpu():
                 epoch_sent_num += audio[0].shape[0]
 
-                # audio_multi = gluon.utils.split_and_load(audio, context, even_split=False)
-                # words_multi = gluon.utils.split_and_load(words, context, even_split=False)
-                # alength_multi = gluon.utils.split_and_load(alength, context, even_split=False)
-                # wlength_multi = gluon.utils.split_and_load(wlength, context, even_split=False)
+                audio_multi = gluon.utils.split_and_load(audio, context, even_split=False)
+                words_multi = gluon.utils.split_and_load(words, context, even_split=False)
+                alength_multi = gluon.utils.split_and_load(alength, context, even_split=False)
+                wlength_multi = gluon.utils.split_and_load(wlength, context, even_split=False)
 
                 with autograd.record():
-                    # losses = [loss(net(a, al, w, wl), w, wl).sum() for a, w, al, wl in
-                    #           zip(audio_multi, words_multi, alength_multi, wlength_multi)]
-                    losses = [loss(net(audio[i].as_in_context(context[i]),
-                                       alength[i].as_in_context(context[i]),
-                                       words[i].as_in_context(context[i]),
-                                       wlength[i].as_in_context(context[i])),
-                                   words[i].as_in_context(context[i]),
-                                   wlength[i].as_in_context(context[i])).sum() for i in range(len(context))]
+                    losses = [loss(net(a, al, w, wl), w, wl).sum() for a, w, al, wl in
+                              zip(audio_multi, words_multi, alength_multi, wlength_multi)]
                     for l in losses:
                         l.backward()
 
