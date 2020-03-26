@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 def preprocess(x):
     name, audio, words = x
     split_words = ['<BOS>'] + words.split(' ') + ['<EOS>']
-    return -1 * audio, np.array([vocabulary[word][0] for word in split_words]), float(len(audio)), float(len(split_words))
+    return audio, np.array([vocabulary[word][0] for word in split_words]), float(len(audio)), float(len(split_words))
 
 
 def get_length(x):
@@ -54,7 +54,7 @@ def preprocess_dataset(dataset):
 
 
 def get_dataloader(train_dataset, dev_dataset, test_dataset, train_data_lengths, batch_size, bucket_num, bucket_ratio,
-                   batch_size_per_gpu, num_shards):
+                   batch_size_per_gpu):
     batchify_fn = nlp.data.batchify.Tuple(
         nlp.data.batchify.Pad(dtype='float32'),
         nlp.data.batchify.Pad(dtype='float32'),
@@ -179,6 +179,7 @@ class AudioEncoderTransformer(Block):
 
     def forward(self, input, lengths):
         ks, ps = self.conv_kernel_size, self.conv_pool_size
+        input = input.expand_dims(1)
         input = self.conv(input)
         input = input.swapaxes(1, 2).reshape(input.shape[0], input.shape[2], -1)
         lengths = mx.nd.floor((mx.nd.floor((mx.nd.floor((mx.nd.floor((lengths-ks)/ps)-ks)/ps)-ks)/ps)-ks)/ps)
@@ -433,6 +434,13 @@ def main():
     # Required parameters
     parser.add_argument("--data_dir", default="data", type=str, required=False,
                         help="The path to the data directory.")
+    parser.add_argument("--train_file", default="train-clean-100.lfb.26.p", type=str, required=False,
+                        help="The path to the train file.")
+    parser.add_argument("--dev_file", default="dev-clean.lfb.26.p", type=str, required=False,
+                        help="The path to the dev file.")
+    parser.add_argument("--test_file", default="test-clean.lfb.26.p", type=str, required=False,
+                        help="The path to the test file.")
+
     parser.add_argument("--checkpoint_dir", default="checkpoints", type=str, required=False,
                         help="The output directory where the model checkpoints will be written.")
 
@@ -452,13 +460,9 @@ def main():
     args.batch_size = args.batch_size_per_gpu * max(1, args.gpu_count)
 
     # Data Processing
-    train_dataset = pickle.load(open(os.path.join(args.data_dir, 'train-clean-100-80.p'), 'rb'))
-    dev_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev-clean-80.p'), 'rb'))
-    test_dataset = pickle.load(open(os.path.join(args.data_dir, 'test-clean-80.p'), 'rb'))
-
-    # train_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))[:10]
-    # dev_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))[:10]
-    # test_dataset = pickle.load(open(os.path.join(args.data_dir, 'dev_processed.p'), 'rb'))[:10]
+    train_dataset = pickle.load(open(os.path.join(args.data_dir, args.train_file), 'rb'))
+    dev_dataset = pickle.load(open(os.path.join(args.data_dir, args.dev_file), 'rb'))
+    test_dataset = pickle.load(open(os.path.join(args.data_dir, args.test_file), 'rb'))
 
     input_size = len(train_dataset[0][1][0])
 
@@ -516,7 +520,7 @@ def main():
 
     logger.info('Running on {}\n'.format(context))
 
-    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=1024, dec_hidden_size=1024)
+    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=256, dec_hidden_size=1024)
     net.initialize(mx.init.Xavier(), ctx=context)
     # summary_ctx = context if context == mx.cpu() else mx.gpu(0)
     # logger.info(net.summary(mx.nd.random.uniform(shape=(32, 500, input_size), ctx=summary_ctx),
