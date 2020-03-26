@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 def preprocess(x):
     name, audio, words = x
     split_words = ['<BOS>'] + words.split(' ') + ['<EOS>']
-    return -1 * audio, np.array([vocabulary[word][0] for word in split_words]), float(len(audio)), float(len(split_words))
+    return audio, np.array([vocabulary[word][0] for word in split_words]), float(len(audio)), float(len(split_words))
 
 
 def get_length(x):
@@ -63,6 +63,8 @@ def main():
     # Required parameters
     parser.add_argument("--data_dir", default="data", type=str, required=False,
                         help="The path to the data directory.")
+    parser.add_argument("--test_file", default="test-clean.lfb.26.p", type=str, required=False,
+                        help="The path to the test file.")
     parser.add_argument("--checkpoint_dir", default="checkpoints", type=str, required=False,
                         help="The output directory where the model checkpoints will be written.")
 
@@ -79,7 +81,7 @@ def main():
     args.batch_size = args.batch_size_per_gpu * max(1, args.gpu_count)
 
     # Data Processing
-    test_dataset = pickle.load(open(os.path.join(args.data_dir, 'test-clean-80.p'), 'rb'))
+    test_dataset = pickle.load(open(os.path.join(args.data_dir, args.test_file), 'rb'))
 
     input_size = len(test_dataset[0][1][0])
 
@@ -107,7 +109,7 @@ def main():
 
     logger.info('Running on {}\n'.format(context))
 
-    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=1024, dec_hidden_size=1024)
+    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=256, dec_hidden_size=1024)
     net.initialize(mx.init.Xavier(), ctx=context)
 
     scorer = nlp.model.BeamSearchScorer(alpha=0, K=5, from_logits=False)
