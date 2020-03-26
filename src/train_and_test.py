@@ -71,17 +71,20 @@ def get_dataloader(train_dataset, dev_dataset, test_dataset, train_data_lengths,
     train_dataloader = gluon.data.DataLoader(
         dataset=train_dataset,
         batch_sampler=batch_sampler,
-        batchify_fn=batchify_fn)
+        batchify_fn=batchify_fn,
+        num_workers=5)
     dev_dataloader = gluon.data.DataLoader(
         dataset=dev_dataset,
         batch_size=batch_size_per_gpu,
         shuffle=False,
-        batchify_fn=batchify_fn)
+        batchify_fn=batchify_fn,
+        num_workers=5)
     test_dataloader = gluon.data.DataLoader(
         dataset=test_dataset,
         batch_size=batch_size_per_gpu,
         shuffle=False,
-        batchify_fn=batchify_fn)
+        batchify_fn=batchify_fn,
+        num_workers=5)
     return train_dataloader, dev_dataloader, test_dataloader
 
 

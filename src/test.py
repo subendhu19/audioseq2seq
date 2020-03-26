@@ -34,26 +34,19 @@ def preprocess_dataset(dataset):
     return dataset, lengths
 
 
-def get_dataloader(test_dataset, test_data_lengths, batch_size, bucket_num, bucket_ratio,
-                   batch_size_per_gpu):
+def get_dataloader(test_dataset, batch_size_per_gpu):
     batchify_fn = nlp.data.batchify.Tuple(
         nlp.data.batchify.Pad(dtype='float32'),
         nlp.data.batchify.Pad(dtype='float32'),
         nlp.data.batchify.Stack(dtype='float32'),
         nlp.data.batchify.Stack(dtype='float32'))
-    batch_sampler = nlp.data.sampler.FixedBucketSampler(
-        test_data_lengths,
-        batch_size=batch_size,
-        num_buckets=bucket_num,
-        ratio=bucket_ratio,
-        shuffle=True)
-    logger.info(batch_sampler.stats())
 
     test_dataloader = gluon.data.DataLoader(
         dataset=test_dataset,
         batch_size=batch_size_per_gpu,
         shuffle=False,
-        batchify_fn=batchify_fn)
+        batchify_fn=batchify_fn,
+        num_workers=5)
     return test_dataloader
 
 
@@ -95,12 +88,8 @@ def main():
 
     # Modeling
     batch_size, batch_size_per_gpu = args.batch_size, args.batch_size_per_gpu
-    bucket_num, bucket_ratio = 10, 0.2
 
-    test_dataloader = get_dataloader(test_dataset,
-                                     test_data_lengths,
-                                     batch_size, bucket_num, bucket_ratio,
-                                     batch_size_per_gpu)
+    test_dataloader = get_dataloader(test_dataset, batch_size_per_gpu)
 
     if args.gpu_count == 0:
         context = mx.cpu()
