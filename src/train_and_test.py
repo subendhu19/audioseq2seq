@@ -515,7 +515,7 @@ def main():
     train_dataloader, dev_dataloader, test_dataloader = get_dataloader(train_dataset, dev_dataset, test_dataset,
                                                                        train_data_lengths,
                                                                        batch_size, bucket_num, bucket_ratio,
-                                                                       batch_size_per_gpu, args.gpu_count)
+                                                                       batch_size_per_gpu)
     if args.gpu_count == 0:
         context = mx.cpu()
     else:
