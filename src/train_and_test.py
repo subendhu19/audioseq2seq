@@ -345,16 +345,18 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
         logger.info('Epoch {}'.format(epoch))
         start_epoch_time = time.time()
         epoch_loss = 0.0
-        epoch_sent_num = 0
+        epoch_ac = 0
         epoch_wc = 0
 
         train_enumerator = tqdm(enumerate(train_dataloader), total=len(train_dataloader))
         for i, (audio, words, alength, wlength) in train_enumerator:
-            wc = alength.sum().asscalar()
+            ac = alength.sum().asscalar()
+            epoch_ac += ac
+
+            wc = wlength.sum().asscalar()
             epoch_wc += wc
 
             if context != mx.cpu():
-                epoch_sent_num += audio[0].shape[0]
 
                 audio_multi = gluon.utils.split_and_load(audio, context, even_split=False)
                 words_multi = gluon.utils.split_and_load(words, context, even_split=False)
@@ -373,7 +375,6 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
                             [p.grad(ctx) for p in parameters if p.grad_req != 'null'],
                             grad_clip)
             else:
-                epoch_sent_num += audio.shape[0]
 
                 with autograd.record():
                     decoder_outputs = net(audio.as_in_context(context), alength.as_in_context(context),
@@ -396,13 +397,13 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
                 'avg loss {:.6f}, throughput {:.2f}K fps'.format(
                     i + 1, len(train_dataloader),
                     time.time() - start_epoch_time,
-                    epoch_loss / epoch_sent_num,
-                    epoch_wc / 1000 / (time.time() - start_epoch_time)))
+                    epoch_loss / epoch_wc,
+                    epoch_ac / 1000 / (time.time() - start_epoch_time)))
 
         end_epoch_time = time.time()
         logger.info('[Epoch {}] train avg loss {:.6f}, '
-                    'throughput {:.2f}K fps\n'.format(epoch, epoch_loss / epoch_sent_num,
-                                                      epoch_wc / 1000 / (end_epoch_time - start_epoch_time)))
+                    'throughput {:.2f}K fps\n'.format(epoch, epoch_loss / epoch_wc,
+                                                      epoch_ac / 1000 / (end_epoch_time - start_epoch_time)))
 
         if (epoch + 1) % 2 == 0:
             test_wer = evaluate(net, context, test_dataloader, beam_sampler)
