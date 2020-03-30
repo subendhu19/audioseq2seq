@@ -356,6 +356,8 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
             sc = audio.shape[0]
             epoch_sc += sc
 
+            start_batch_time = time.time()
+
             if context != mx.cpu():
 
                 audio_multi = gluon.utils.split_and_load(audio, context, even_split=False)
@@ -400,7 +402,7 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
                     i + 1, len(train_dataloader),
                     time.time() - start_epoch_time,
                     batch_loss / sc,
-                    ac / 1000 / (time.time() - start_epoch_time)))
+                    ac / 1000 / (time.time() - start_batch_time)))
 
         end_epoch_time = time.time()
         logger.info('[Epoch {}] train avg loss {:.6f}, '
