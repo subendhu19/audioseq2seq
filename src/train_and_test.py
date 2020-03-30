@@ -346,15 +346,15 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
         start_epoch_time = time.time()
         epoch_loss = 0.0
         epoch_ac = 0
-        epoch_wc = 0
+        epoch_sc = 0
 
         train_enumerator = tqdm(enumerate(train_dataloader), total=len(train_dataloader))
         for i, (audio, words, alength, wlength) in train_enumerator:
             ac = alength.sum().asscalar()
             epoch_ac += ac
 
-            wc = wlength.sum().asscalar()
-            epoch_wc += wc
+            sc = audio.shape[0]
+            epoch_sc += sc
 
             if context != mx.cpu():
 
@@ -389,20 +389,22 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
 
             trainer.step(1, ignore_stale_grad=True)
             if context != mx.cpu():
-                epoch_loss += np.sum(losses).asscalar()
+                batch_loss = np.sum(losses).asscalar()
             else:
-                epoch_loss += L.asscalar()
+                batch_loss = L.asscalar()
+            epoch_loss += batch_loss
+
             train_enumerator.set_description(
                 '[Batch {}/{}] elapsed {:.2f} s, '
                 'avg loss {:.6f}, throughput {:.2f}K fps'.format(
                     i + 1, len(train_dataloader),
                     time.time() - start_epoch_time,
-                    epoch_loss / epoch_wc,
-                    epoch_ac / 1000 / (time.time() - start_epoch_time)))
+                    batch_loss / sc,
+                    ac / 1000 / (time.time() - start_epoch_time)))
 
         end_epoch_time = time.time()
         logger.info('[Epoch {}] train avg loss {:.6f}, '
-                    'throughput {:.2f}K fps\n'.format(epoch, epoch_loss / epoch_wc,
+                    'throughput {:.2f}K fps\n'.format(epoch, epoch_loss / epoch_sc,
                                                       epoch_ac / 1000 / (end_epoch_time - start_epoch_time)))
 
         if (epoch + 1) % 2 == 0:
