@@ -54,7 +54,7 @@ def preprocess_dataset(dataset):
 
 
 def get_dataloader(train_dataset, dev_dataset, test_dataset, train_data_lengths, batch_size, bucket_num, bucket_ratio,
-                   batch_size_per_gpu):
+                   bucket_scheme, batch_size_per_gpu):
     batchify_fn = nlp.data.batchify.Tuple(
         nlp.data.batchify.Pad(dtype='float32'),
         nlp.data.batchify.Pad(dtype='float32'),
@@ -65,7 +65,8 @@ def get_dataloader(train_dataset, dev_dataset, test_dataset, train_data_lengths,
         batch_size=batch_size,
         num_buckets=bucket_num,
         ratio=bucket_ratio,
-        shuffle=True)
+        shuffle=True,
+        bucket_scheme=bucket_scheme)
     logger.info(batch_sampler.stats())
 
     train_dataloader = gluon.data.DataLoader(
@@ -403,7 +404,7 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
                     'throughput {:.2f}K fps\n'.format(epoch, epoch_loss / epoch_sent_num,
                                                       epoch_wc / 1000 / (end_epoch_time - start_epoch_time)))
 
-        if (epoch + 1) % 10 == 0:
+        if (epoch + 1) % 2 == 0:
             test_wer = evaluate(net, context, test_dataloader, beam_sampler)
             logger.info('[Epoch {}] test WER {:.2f}\n'.format(epoch, test_wer))
             net.save_parameters(os.path.join(checkpoint_dir, 'epoch_{}.params'.format(epoch)))
@@ -508,14 +509,15 @@ def main():
 
     # Modeling
     learning_rate, batch_size, batch_size_per_gpu = args.learning_rate, args.batch_size, args.batch_size_per_gpu
-    bucket_num, bucket_ratio = 10, 0.2
+    bucket_num, bucket_ratio = 10, 0.8
+    bucket_scheme = nlp.data.ExpWidthBucket(bucket_len_step=1.2)
     grad_clip = 10
     epochs = args.num_epochs
 
     train_dataloader, dev_dataloader, test_dataloader = get_dataloader(train_dataset, dev_dataset, test_dataset,
                                                                        train_data_lengths,
                                                                        batch_size, bucket_num, bucket_ratio,
-                                                                       batch_size_per_gpu)
+                                                                       bucket_scheme, batch_size_per_gpu)
     if args.gpu_count == 0:
         context = mx.cpu()
     else:
@@ -523,7 +525,7 @@ def main():
 
     logger.info('Running on {}\n'.format(context))
 
-    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=256, dec_hidden_size=1024)
+    net = Seq2Seq(input_size=input_size, output_size=len(vocabulary), enc_hidden_size=256, dec_hidden_size=512)
     net.initialize(mx.init.Xavier(), ctx=context)
     # summary_ctx = context if context == mx.cpu() else mx.gpu(0)
     # logger.info(net.summary(mx.nd.random.uniform(shape=(32, 500, input_size), ctx=summary_ctx),
