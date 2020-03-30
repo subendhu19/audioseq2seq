@@ -200,10 +200,10 @@ class AudioWordDecoder(Block):
         with self.name_scope():
             self.embedding = nn.Embedding(output_size, hidden_size)
             self.dropout = gluon.nn.Dropout(.15)
-            self.transformer = TransformerDecoder(units=self.hidden_size, num_layers=10,
+            self.transformer = TransformerDecoder(units=self.hidden_size, num_layers=8,
                                                   hidden_size=self.hidden_size * 2,
                                                   max_length=100,
-                                                  num_heads=16, dropout=.15)
+                                                  num_heads=8, dropout=.15)
             self.out = nn.Dense(output_size, in_units=self.hidden_size, flatten=False)
 
     def forward(self, input, enc_outs, enc_valid_lengths, dec_valid_lengths):
