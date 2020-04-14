@@ -15,7 +15,7 @@ from mxnet import gluon, autograd
 from mxnet.gluon import nn, rnn, Block
 from mxnet import ndarray as F
 from gluonnlp.model.transformer import TransformerEncoder
-from gluonnlp.model.transformer import TransformerDecoder
+from gluonnlp.model.transformer import TransformerDecoder, TransformerOneStepDecoder
 from mxnet.gluon.loss import Loss as Loss
 import argparse
 import nltk
@@ -205,12 +205,17 @@ class AudioWordDecoder(Block):
                                                   hidden_size=self.hidden_size * 2,
                                                   max_length=100,
                                                   num_heads=8, dropout=.15)
+            self.one_step_transformer = TransformerOneStepDecoder(units=self.hidden_size, num_layers=8,
+                                                                  hidden_size=self.hidden_size * 2,
+                                                                  max_length=100,
+                                                                  num_heads=8, dropout=.15,
+                                                                  params=self.transformer.collect_params())
             self.out = nn.Dense(output_size, in_units=self.hidden_size, flatten=False)
 
-    def forward(self, input, enc_outs, enc_valid_lengths, dec_valid_lengths):
-        output = self.dropout(self.embedding(input))
+    def forward(self, inputs, enc_outs, enc_valid_lengths, dec_valid_lengths):
+        dec_input = self.dropout(self.embedding(inputs))
         dec_states = self.transformer.init_state_from_encoder(enc_outs, enc_valid_lengths)
-        output, _, _ = self.transformer.decode_seq(output, dec_states, dec_valid_lengths)
+        output, _, _ = self.transformer(dec_input, dec_states, dec_valid_lengths)
         output = self.out(output)
         return output
 
@@ -264,7 +269,7 @@ class BeamDecoder(object):
 
     def __call__(self, outputs, dec_states):
         outputs = self._model.decoder.embedding(outputs)
-        outputs, new_states, _ = self._model.decoder.transformer(outputs, dec_states)
+        outputs, new_states, _ = self._model.decoder.one_step_transformer(outputs, dec_states)
         return self._model.decoder.out(outputs), new_states
 
 
@@ -305,25 +310,36 @@ def get_bleu(s1, l1, s2, l2):
     return scores
 
 
-def evaluate(net, context, test_dataloader, beam_sampler):
+def evaluate(net, context, test_dataloader, beam_sampler, metric='WER'):
     if context != mx.cpu():
         context = mx.gpu(0)
-    all_scores = []
     logger.info('Evaluating...')
-    test_enumerator = tqdm(enumerate(test_dataloader), total=len(test_dataloader))
-    for i, (audio, words, alength, wlength) in test_enumerator:
-        encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context),
-                                                           alength.as_in_context(context))
-        outputs = mx.nd.array([2] * words.shape[0]).as_in_context(context)
-        decoder_states = net.decoder.transformer.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
-        samples, scores, valid_lengths = beam_sampler(outputs, decoder_states)
-        best_samples = samples[:, 0, 1:]
-        best_vlens = valid_lengths[:, 0]
-        scores = get_wer(words.as_in_context(context)[:, 1:], wlength.as_in_context(context) - 1,
-                         best_samples, best_vlens - 1)
-        all_scores += scores
-        test_enumerator.set_description('WER: {:.2f}'.format(np.mean(all_scores)))
-    return np.mean(all_scores)
+
+    if metric == 'WER':
+        all_scores = []
+        test_enumerator = tqdm(enumerate(test_dataloader), total=len(test_dataloader))
+        for i, (audio, words, alength, wlength) in test_enumerator:
+            encoder_outputs, encoder_out_lengths = net.encoder(audio.as_in_context(context),
+                                                               alength.as_in_context(context))
+            outputs = mx.nd.array([2] * words.shape[0]).as_in_context(context)
+            decoder_states = net.decoder.transformer.init_state_from_encoder(encoder_outputs, encoder_out_lengths)
+            samples, scores, valid_lengths = beam_sampler(outputs, decoder_states)
+            best_samples = samples[:, 0, 1:]
+            best_vlens = valid_lengths[:, 0]
+            scores = get_wer(words.as_in_context(context)[:, 1:], wlength.as_in_context(context) - 1,
+                             best_samples, best_vlens - 1)
+            all_scores += scores
+            test_enumerator.set_description('WER: {:.2f}'.format(np.mean(all_scores)))
+        return np.mean(all_scores)
+    else:
+        perp = mx.metric.Perplexity(ignore_label=0)
+        test_enumerator = tqdm(enumerate(test_dataloader), total=len(test_dataloader))
+        for i, (audio, words, alength, wlength) in test_enumerator:
+            decoder_outputs = net(audio.as_in_context(context), alength.as_in_context(context),
+                                  words.as_in_context(context), wlength.as_in_context(context))
+            perp.update(words.as_in_context(context), decoder_outputs)
+            test_enumerator.set_description('Perplexity: {:.2f}'.format(perp.get()[1]))
+        return perp.get()[1]
 
 
 def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test_dataloader,
@@ -339,7 +355,8 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
 
     parameters = net.collect_params().values()
 
-    best_test_metrics = {'epoch': 0, 'metric': 1}
+    metric = 'Perplexity'
+    best_test_metrics = {'epoch': 0, metric: 1e8}
 
     for epoch in range(epochs):
         logger.info('Epoch {}'.format(epoch))
@@ -410,12 +427,12 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
                                                       epoch_ac / 1000 / (end_epoch_time - start_epoch_time)))
 
         if (epoch + 1) % 2 == 0:
-            test_wer = evaluate(net, context, test_dataloader, beam_sampler)
-            logger.info('[Epoch {}] test WER {:.2f}\n'.format(epoch, test_wer))
+            test_met = evaluate(net, context, test_dataloader, beam_sampler, metric=metric)
+            logger.info('[Epoch {}] test {} {:.2f}\n'.format(epoch, metric, test_met))
             net.save_parameters(os.path.join(checkpoint_dir, 'epoch_{}.params'.format(epoch)))
-            if test_wer < best_test_metrics['metric']:
+            if test_met < best_test_metrics[metric]:
                 best_test_metrics['epoch'] = epoch
-                best_test_metrics['metric'] = test_wer
+                best_test_metrics[metric] = test_met
                 net.save_parameters(os.path.join(checkpoint_dir, 'best.params'))
 
     logger.info('Training complete.\n')
