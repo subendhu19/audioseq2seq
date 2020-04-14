@@ -408,7 +408,8 @@ def train(net, context, epochs, learning_rate, grad_clip, train_dataloader, test
 
             trainer.step(1, ignore_stale_grad=True)
             if context != mx.cpu():
-                batch_loss = np.sum(losses).asscalar()
+                # batch_loss = np.sum(losses).asscalar()
+                batch_loss = np.sum([l.asscalar() for l in losses])
             else:
                 batch_loss = L.asscalar()
             epoch_loss += batch_loss
